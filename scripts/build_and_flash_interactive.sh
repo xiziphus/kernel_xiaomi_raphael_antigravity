@@ -4,7 +4,9 @@ set -e
 # Configuration
 REPO_URL="https://github.com/SOVIET-ANDROID/kernel_xiaomi_raphael"
 BRANCH="main"
-WORK_DIR="$(pwd)"
+# Robustly find the repo root (assuming script is in scripts/)
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+WORK_DIR="$(dirname "$SCRIPT_DIR")"
 KERNEL_DIR="$WORK_DIR/kernel_source"
 TOOLCHAIN_DIR="$WORK_DIR/toolchain"
 OUT_DIR="$WORK_DIR/out"
@@ -24,6 +26,7 @@ error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 info() { echo -e "${BLUE}[MENU] $1${NC}"; }
 
 # --- Helper Functions ---
+
 install_if_missing() {
     local cmd=$1
     local package=$2
@@ -172,6 +175,7 @@ backup_boot() {
     
     if [[ -n "$ADB_DEVICES" ]]; then
         # Requires root
+        mkdir -p "$WORK_DIR/backups"
         adb shell "su -c 'dd if=/dev/block/bootdevice/by-name/boot of=/sdcard/boot_backup_$(date +%Y%m%d).img'"
         adb pull "/sdcard/boot_backup_$(date +%Y%m%d).img" "$WORK_DIR/backups/"
         log "Backup saved to $WORK_DIR/backups/"
@@ -225,6 +229,16 @@ collect_logs() {
     adb shell dmesg > "logs/dmesg_$(date +%Y%m%d_%H%M%S).log"
     adb logcat -d > "logs/logcat_$(date +%Y%m%d_%H%M%S).log"
     log "Logs saved to logs/ directory."
+}
+
+rebuild_docker_image() {
+    log "Rebuilding Docker Image..."
+    if [ -f "$WORK_DIR/Dockerfile" ]; then
+        docker build --no-cache -t android-kernel-builder "$WORK_DIR"
+        log "Docker image rebuilt successfully."
+    else
+        error "Dockerfile not found at $WORK_DIR/Dockerfile!"
+    fi
 }
 
 update_kernel_source() {
