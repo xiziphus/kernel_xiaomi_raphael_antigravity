@@ -107,37 +107,56 @@ This is a **userspace limitation**, not a kernel issue. The kernel is fully Dock
 
 ### Build Steps
 
-1. **Clone the kernel source**
-   ```bash
-   git clone https://github.com/SOVIET-ANDROID/kernel_xiaomi_raphael
-   cd kernel_xiaomi_raphael
-   ```
+The easiest way to build, flash, and release is using our **interactive script**:
 
-2. **Download toolchain**
-   ```bash
-   # Download Android Clang 18.0.1 (r522817)
-   # https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/
-   ```
+```bash
+./scripts/build_and_flash_interactive.sh
+```
 
-3. **Run the build**
-   ```bash
-   ./run_builder_soviet.sh
-   ```
+This script handles everything for you:
+1.  **Dependency Check**: Installs missing tools (Python, Git, etc.) via Homebrew.
+2.  **Source Management**: Clones or updates the kernel source.
+3.  **Build Environment**: Sets up the Docker container automatically.
+4.  **Compilation**: Builds the kernel with your personalized config.
+5.  **Repack**: Creates a flashable `boot.img`.
+6.  **Flash**: Auto-detects your device (ADB/Fastboot) and flashes.
+7.  **Extras**: Can create AnyKernel3 zips, backup your current boot image, and more.
 
-4. **Repack the boot image**
-   ```bash
-   python3 mkbootimg_src/mkbootimg.py \
-     --kernel out/arch/arm64/boot/Image.gz-dtb \
-     --ramdisk stock_kernel_extracted/ramdisk.cpio.gz \
-     --cmdline "console=null androidboot.hardware=qcom ..." \
-     --base 0x10000000 \
-     --pagesize 4096 \
-     --os_version 0 \
-     --os_patch_level 2025-10 \
-     --output boot.img
-   ```
+#### Manual Build (Legacy)
 
-See [BUILD.md](BUILD.md) for detailed instructions.
+If you prefer doing it manually:
+
+1.  **Clone the kernel source**
+    ```bash
+    git clone https://github.com/SOVIET-ANDROID/kernel_xiaomi_raphael
+    cd kernel_xiaomi_raphael
+    ```
+
+2.  **Download toolchain**
+    ```bash
+    # Download Android Clang 18.0.1 (r522817)
+    # https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/
+    ```
+
+3.  **Run the build**
+    ```bash
+    ./run_builder_soviet.sh
+    ```
+
+4.  **Repack the boot image**
+    ```bash
+    python3 mkbootimg_src/mkbootimg.py \
+      --kernel out/arch/arm64/boot/Image.gz-dtb \
+      --ramdisk stock_kernel_extracted/ramdisk.cpio.gz \
+      --cmdline "console=null androidboot.hardware=qcom ..." \
+      --base 0x10000000 \
+      --pagesize 4096 \
+      --os_version 0 \
+      --os_patch_level 2025-10 \
+      --output boot.img
+    ```
+
+See [BUILD.md](BUILD.md) for detailed manual instructions.
 
 ## Technical Details
 
