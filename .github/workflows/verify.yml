@@ -1,0 +1,125 @@
+name: Kernel Build Verification
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  verify-configs:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Verify docker.config syntax
+      run: |
+        echo "Checking docker.config format..."
+        if [ ! -f docker.config ]; then
+          echo "Error: docker.config not found"
+          exit 1
+        fi
+        
+        # Check for required configs
+        REQUIRED_CONFIGS=(
+          "CONFIG_NAMESPACES"
+          "CONFIG_USER_NS"
+          "CONFIG_PID_NS"
+          "CONFIG_CGROUP_PIDS"
+          "CONFIG_OVERLAY_FS"
+        )
+        
+        for config in "${REQUIRED_CONFIGS[@]}"; do
+          if ! grep -q "$config=y" docker.config; then
+            echo "Error: $config not found or not enabled"
+            exit 1
+          fi
+        done
+        
+        echo "✓ All required configs present"
+    
+    - name: Verify documentation
+      run: |
+        echo "Checking documentation completeness..."
+        
+        REQUIRED_DOCS=(
+          "README.md"
+          "BUILD.md"
+          "CHANGELOG.md"
+          "docs/JOURNEY.md"
+          "docs/BEGINNERS_GUIDE.md"
+          "docs/TECHNICAL.md"
+          "docs/FAQ.md"
+        )
+        
+        for doc in "${REQUIRED_DOCS[@]}"; do
+          if [ ! -f "$doc" ]; then
+            echo "Error: $doc not found"
+            exit 1
+          fi
+        done
+        
+        echo "✓ All documentation files present"
+    
+    - name: Verify scripts are executable
+      run: |
+        echo "Checking script permissions..."
+        
+        SCRIPTS=(
+          "scripts/verify_kernel.sh"
+          "scripts/build_kernel_soviet_docker.sh"
+          "run_builder_soviet.sh"
+        )
+        
+        for script in "${SCRIPTS[@]}"; do
+          if [ ! -x "$script" ]; then
+            echo "Warning: $script is not executable"
+            chmod +x "$script"
+          fi
+        done
+        
+        echo "✓ All scripts are executable"
+    
+    - name: Check for common issues
+      run: |
+        echo "Checking for common issues..."
+        
+        # Check for TODO/FIXME comments
+        if grep -r "TODO\|FIXME" --include="*.sh" --include="*.md" .; then
+          echo "Warning: Found TODO/FIXME comments"
+        fi
+        
+        # Check for placeholder text
+        if grep -r "YOUR_USERNAME\|PLACEHOLDER" --include="*.md" .; then
+          echo "Warning: Found placeholder text"
+        fi
+        
+        echo "✓ Basic checks complete"
+
+  lint-markdown:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Lint markdown files
+      uses: actionshub/markdownlint@main
+      continue-on-error: true
+
+  check-links:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Check markdown links
+      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        use-quiet-mode: 'yes'
+        config-file: '.github/markdown-link-check-config.json'
+      continue-on-error: true

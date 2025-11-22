@@ -1,0 +1,14 @@
+{
+  "ignorePatterns": [
+    {
+      "pattern": "^https://android.googlesource.com"
+    },
+    {
+      "pattern": "^https://github.com/xiziphus"
+    }
+  ],
+  "timeout": "20s",
+  "retryOn429": true,
+  "retryCount": 3,
+  "aliveStatusCodes": [200, 206]
+}

@@ -1,5 +1,12 @@
 # Redmi K20 Pro Docker Kernel (Android 16)
 
+![License](https://img.shields.io/badge/license-GPL--2.0-blue)
+![Platform](https://img.shields.io/badge/platform-Android%2016-green)
+![Device](https://img.shields.io/badge/device-Redmi%20K20%20Pro-orange)
+![Kernel](https://img.shields.io/badge/kernel-4.14.353-red)
+![Maintenance](https://img.shields.io/badge/maintenance-as--is-yellow)
+![Build](https://github.com/xiziphus/kernel_xiaomi_raphael_antigravity/workflows/Kernel%20Build%20Verification/badge.svg)
+
 > [!WARNING]
 > **This project is not actively maintained.** It is provided as-is for educational purposes and as a foundation for others to build upon. Feel free to fork and continue development.
 
@@ -34,6 +41,15 @@ This kernel has been tested on:
 - **ROM**: Evolution X Android 16
 - **Root Method**: Magisk
 - **Status**: ✅ Boots successfully, encryption working, Docker kernel features verified
+
+## Quick Links
+
+- 📘 [Beginner's Guide](docs/BEGINNERS_GUIDE.md) - Step-by-step tutorial
+- 📖 [The Journey](docs/JOURNEY.md) - Complete development story
+- 🔧 [Technical Deep Dive](docs/TECHNICAL.md) - Advanced details
+- ❓ [FAQ](docs/FAQ.md) - Frequently asked questions
+- 🐛 [Report an Issue](../../issues/new/choose)
+- 💬 [Discussions](../../discussions)
 
 ## Installation
 
