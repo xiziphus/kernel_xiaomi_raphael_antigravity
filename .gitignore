@@ -1,0 +1,73 @@
+# Build artifacts
+out/
+*.o
+*.ko
+*.mod.c
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+*.log
+
+# Kernel images (keep release/ folder)
+*.img
+!release/*.img
+*.gz
+!release/*.gz
+*.dtb
+*.dtbo
+
+# Backup files
+*~
+*.swp
+*.bak
+*.orig
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Archives (user can delete)
+archive/
+
+# Toolchains (too large for git)
+clang-*/
+gcc-*/
+*.tar.gz
+*.zip
+
+# Disk images
+*.dmg
+*.sparseimage
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Config files (keep docker.config)
+.config
+.config.old
+defconfig
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+
+# Build logs
+*.log
+!release/*.log
+
+# Large source directories (link instead)
+kernel_source/
+soviet_kernel_stock/

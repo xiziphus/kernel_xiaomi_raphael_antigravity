@@ -1,0 +1,7 @@
+Header version: 0
+Page size: 4096
+Kernel address: 0x00008000
+Ramdisk address: 0x01000000
+Second address: 0x00000000
+Tags address: 0x00000100
+Cmdline: console=null androidboot.hardware=qcom androidboot.usbcontroller=a600000.dwc3 androidboot.boot_devices=soc/1d84000.ufshc service_locator.enable=1 lpm_levels.sleep_disabled=1 loop.max_part=16 androidboot.init_fatal_reboot_target=recovery kpti=off swiotlb=1 androidboot.super_partition=system
