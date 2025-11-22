@@ -190,5 +190,5 @@ This project follows the same license as the upstream kernel source (GPL-2.0).
 
 ---
 
-**Maintained by**: [Your GitHub Username]  
+**(Not) Maintained by**: XIZIPHUS  
 **Last Updated**: November 2025
