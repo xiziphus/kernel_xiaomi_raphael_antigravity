@@ -7,6 +7,14 @@ echo "Target: Raphael (Mi 9T Pro) - Android 16"
 echo "Toolchain: Android Clang 18.0.1"
 echo ""
 
+# =========================================================
+# PERSONALIZATION (Edit these to customize your build)
+# =========================================================
+export KBUILD_BUILD_USER="Xiziphus/ Gemini 3 pro"
+export KBUILD_BUILD_HOST="github.com/xiziphus/kernel_xiaomi_raphael_antigravity"
+export LOCALVERSION="-1.0-Alpha"
+# =========================================================
+
 # Paths (container-relative)
 KERNEL_DIR="/kernel/soviet_kernel_stock"
 CLANG_DIR="/opt/clang"
