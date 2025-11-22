@@ -560,6 +560,14 @@ grep CONFIG_USER_NS out/include/generated/autoconf.h
 
 ## FAQ
 
+For more questions and answers, see the comprehensive [FAQ.md](FAQ.md) which covers:
+- General questions about the project
+- Compatibility with different devices and ROMs
+- Root and security questions
+- Docker functionality details
+- Build process questions
+- Installation and troubleshooting
+
 ### Q: How long does the build take?
 **A**: 10-20 minutes on a modern computer with 16 CPU cores. First build is slower, rebuilds are faster with ccache.
 

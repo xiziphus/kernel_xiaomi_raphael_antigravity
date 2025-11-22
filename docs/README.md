@@ -40,6 +40,19 @@ Welcome to the Redmi K20 Pro Docker Kernel documentation!
    - Docker requirements
    - Build optimizations
 
+### Quick Reference
+4. **[FAQ.md](FAQ.md)**
+   - 70+ frequently asked questions
+   - Compatibility information
+   - Troubleshooting quick answers
+   - Docker runtime explanations
+
+5. **[RESOURCES.md](RESOURCES.md)**
+   - Official documentation links
+   - Toolchains and build tools
+   - Community forums
+   - Learning resources
+
 ## Main Repository Documentation
 
 ### Essential Files
@@ -101,8 +114,15 @@ JOURNEY.md (Pitfalls section) → TECHNICAL.md → BEGINNERS_GUIDE.md (Troublesh
 
 ### Build Commands
 ```bash
-# Full build
-./run_builder.sh
+# Using Makefile
+make build    # Build kernel
+make verify   # Verify features on device
+make clean    # Clean build artifacts
+make flash    # Flash to device (with confirmation)
+
+# Or directly
+./run_builder_soviet.sh
+```
 
 # Repack boot image
 python3 mkbootimg.py \
