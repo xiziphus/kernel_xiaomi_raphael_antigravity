@@ -35,6 +35,21 @@ RUN apt-get update && apt-get install -y \
 # Install Clang and LLVM
 RUN apt-get update && apt-get install -y clang lld llvm
 
+# ccache. build_kernel_soviet_docker.sh sets USE_CCACHE=1 and CCACHE_DIR and
+# prints "ccache enabled", but ccache was never actually installed here, so the
+# cache stayed empty and every rebuild recompiled the whole tree from cold.
+# The kernel is built with the AOSP prebuilt at /opt/clang, not a distro clang,
+# so the stock /usr/lib/ccache symlinks (gcc/g++/cc/c++ only) do not help --
+# the build script invokes ccache explicitly via CC instead.
+RUN apt-get update && apt-get install -y ccache && rm -rf /var/lib/apt/lists/*
+
+# cpio and zstd are required by kernel/gen_kheaders.sh, which runs whenever
+# CONFIG_IKHEADERS=y (it is, on the InfinityX config). Without cpio the build
+# dies late with an opaque exit 127:
+#   make[2]: *** [kernel/Makefile:135: kernel/kheaders_data.tar.xz] Error 127
+# rsync is needed to stage the source tree onto tmpfs.
+RUN apt-get update && apt-get install -y cpio zstd rsync && rm -rf /var/lib/apt/lists/*
+
 # Install GCC cross-compilers (required for some kernel builds even with Clang)
 RUN apt-get update && apt-get install -y \
     gcc-aarch64-linux-gnu \

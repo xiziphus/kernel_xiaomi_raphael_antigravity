@@ -7,6 +7,21 @@
 ![Maintenance](https://img.shields.io/badge/maintenance-as--is-yellow)
 ![Build](https://github.com/xiziphus/kernel_xiaomi_raphael_antigravity/workflows/Kernel%20Build%20Verification/badge.svg)
 
+> [!IMPORTANT]
+> **Superseded — active work continues at
+> [xiziphus/raphael-docker-kernel](https://github.com/xiziphus/raphael-docker-kernel).**
+>
+> That repo carries the flashable KernelSU module, the `dockerctl` tooling and a
+> WebUI, and it targets the **ROM's own kernel tree** rather than SOVIET-ANDROID.
+> A pristine 4.14 from LineageOS compiles and boots, then dies in userspace at
+> `bpfloader` — Android 16's `netbpfload` needs eBPF backports that only the
+> ROM's tree carries, and no config diff can show that, because every
+> `CONFIG_BPF*` symbol is identical between the two.
+>
+> This repo remains the build harness and the historical record. The material
+> added since is the InfinityX build path (`scripts/build_kernel_infinityx.sh`,
+> `infinityx.config`) and the on-device scripts under `scripts/device/`.
+
 > [!WARNING]
 > **This project is not actively maintained.** It is provided as-is for educational purposes and as a foundation for others to build upon. Feel free to fork and continue development.
 

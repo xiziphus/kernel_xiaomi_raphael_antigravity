@@ -71,3 +71,52 @@ __pycache__/
 # Large source directories (link instead)
 kernel_source/
 soviet_kernel_stock/
+
+# Build environment kept inside the repo folder (see scripts/build-env.sh).
+# build.sparseimage is a case-sensitive APFS image holding the kernel tree and
+# toolchain — this volume is exFAT and cannot host a Linux source tree itself.
+# (*.sparseimage is already covered under "Disk images" above.)
+toolchain/
+backups/
+logs/
+
+# Saved build artifacts (builds/<kernel.release>/). Each holds a 13 MB
+# Image.gz-dtb plus the .config and log that produced it. Kept out of git for
+# size; promote one to release/ deliberately if it is worth shipping.
+# MANIFEST.md in each is tracked so provenance survives without the binary.
+# NB: must be builds/*/* not builds/* -- the latter only matches one level down,
+# so the files inside each build directory would escape it. Git also cannot
+# re-include a file whose parent directory is excluded, so the directories
+# themselves are deliberately left un-ignored.
+builds/*/*
+!builds/*/MANIFEST.md
+!builds/*/SHA256SUMS
+
+# InfinityX device capture: keep the config and header text (small, valuable);
+# the ramdisk/dtb are binaries pulled from the device.
+infinityx/*.gz
+infinityx/boot_extracted/ramdisk.cpio.gz
+infinityx/boot_extracted/dtb
+state-mirror/
+raphael-state/
+
+# ---------------------------------------------------------------------------
+# Artifacts and working copies from the InfinityX / Docker-kernel work.
+# The distributable module and its source now live in a separate repo:
+#   https://github.com/xiziphus/raphael-docker-kernel
+# Keeping build output and a nested clone out of this tree; the sources that
+# produce them are tracked.
+# ---------------------------------------------------------------------------
+builds/
+dist/
+module/
+repo-mirror/
+state-mirror/
+raphael-state/
+backups/
+infinityx/boot_extracted/
+
+# AnyKernel3 is vendored by cloning osm0sis/AnyKernel3 into AnyKernel3/,
+# preserving our customised anykernel.sh. Track only that file.
+AnyKernel3/*
+!AnyKernel3/anykernel.sh
