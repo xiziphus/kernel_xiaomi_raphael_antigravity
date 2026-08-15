@@ -1,0 +1,205 @@
+name: Build Raphael Kernel (Docker-enabled)
+
+# Cloud replacement for the local Docker build (run_builder_soviet.sh +
+# scripts/build_kernel_soviet_docker.sh). Same recipe, no local Docker/exFAT/
+# sparse-image dance: clone SOVIET source -> AOSP Clang r522817 -> raphael_defconfig
+# + merge this repo's docker.config -> Image.gz-dtb -> AnyKernel3 zip.
+
+permissions:
+  contents: read
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: 'Kernel source repo'
+        required: false
+        type: string
+        default: 'https://github.com/SOVIET-ANDROID/kernel_xiaomi_raphael.git'
+      kernel_branch:
+        description: 'Kernel branch (16.0 = Android 16, 4.14.357, KernelSU-Next in-tree)'
+        required: false
+        type: string
+        default: '16.0'
+      defconfig:
+        description: 'Base defconfig'
+        required: false
+        type: string
+        default: 'raphael_defconfig'
+      clang_url:
+        description: 'AOSP Clang prebuilt tarball (r522817 is load-bearing; other Clang bootloops per JOURNEY.md)'
+        required: false
+        type: string
+        default: 'https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz'
+      localversion:
+        description: 'CONFIG_LOCALVERSION suffix'
+        required: false
+        type: string
+        default: '-Docker-CI'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      KERNEL_DIR: kernel
+      CLANG_DIR: /home/runner/clang
+      CCACHE_DIR: /home/runner/.ccache
+      KBUILD_BUILD_USER: xiziphus
+      KBUILD_BUILD_HOST: github-actions
+
+    steps:
+      - name: Checkout harness repo (docker.config + AnyKernel3/anykernel.sh)
+        uses: actions/checkout@v4
+
+      - name: Free up runner disk space
+        run: |
+          # GitHub runners ship ~14G free; the ThinLTO out/ tree + Clang need more.
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/graalvm /usr/local/share/powershell /usr/share/swift \
+            /usr/local/lib/node_modules /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/chromium /usr/local/share/boost 2>/dev/null || true
+          sudo apt-get clean
+          echo "after:"; df -h / | tail -1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          # NOTE: do NOT install distro clang -- this tree must build with the AOSP
+          # prebuilt (r522817) or it bootloops. We only need binutils, host libs,
+          # the cross-gcc prefixes for CROSS_COMPILE, and packaging tools.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev ccache \
+            lz4 zip unzip python3 cpio wget git \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.ccache
+          key: ccache-raphael-${{ inputs.kernel_branch }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-raphael-${{ inputs.kernel_branch }}-
+            ccache-raphael-
+
+      - name: Fetch AOSP Clang r522817
+        run: |
+          mkdir -p "$CLANG_DIR"
+          echo "Downloading: ${{ inputs.clang_url }}"
+          curl -fL --retry 3 -o /tmp/clang.tar.gz "${{ inputs.clang_url }}"
+          tar -xzf /tmp/clang.tar.gz -C "$CLANG_DIR"
+          rm -f /tmp/clang.tar.gz
+          "$CLANG_DIR/bin/clang" --version | head -2
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth=1 -b "${{ inputs.kernel_branch }}" \
+            "${{ inputs.kernel_repo }}" "$KERNEL_DIR"
+          echo "--- kernel version ---"
+          make -s -C "$KERNEL_DIR" kernelversion 2>/dev/null || \
+            grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL)' "$KERNEL_DIR/Makefile" | head -3
+
+      - name: Enable swap (ThinLTO ld.lld link is the RAM spike)
+        run: |
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /mnt/swapfile
+          if sudo fallocate -l 12G /mnt/swapfile; then
+            sudo chmod 600 /mnt/swapfile
+            sudo mkswap /mnt/swapfile
+            sudo swapon /mnt/swapfile || echo "swapon not permitted; continuing"
+          else
+            echo "swap alloc failed; continuing without extra swap"
+          fi
+          free -h
+
+      - name: Configure kernel (raphael_defconfig + docker.config)
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+          export ARCH=arm64 SUBARCH=arm64
+          export PATH="$CLANG_DIR/bin:$PATH"
+          rm -rf out && mkdir -p out
+
+          echo "=== base defconfig ==="
+          make O=out ARCH=arm64 "${{ inputs.defconfig }}"
+
+          echo "=== merge docker.config fragment ==="
+          ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
+            "$GITHUB_WORKSPACE/docker.config"
+
+          echo "=== olddefconfig ==="
+          make O=out ARCH=arm64 olddefconfig
+
+          echo "=== retention check: critical Docker options must survive ==="
+          fail=0
+          for o in NAMESPACES PID_NS NET_NS CGROUP_PIDS CGROUP_DEVICE POSIX_MQUEUE \
+                   OVERLAY_FS VETH BRIDGE NETFILTER_XT_MATCH_ADDRTYPE NF_NAT NF_TABLES; do
+            if ! grep -q "^CONFIG_${o}=y" out/.config; then
+              echo "FATAL: CONFIG_${o} did not survive olddefconfig"; fail=1
+            fi
+          done
+          # POLLY must be OFF (it hangs the compile); JOURNEY.md invariant.
+          if grep -q "^CONFIG_LLVM_POLLY=y" out/.config; then
+            echo "FATAL: CONFIG_LLVM_POLLY is ON -- build will hang"; fail=1
+          fi
+          [ "$fail" = 0 ] && echo "config OK" || exit 1
+
+      - name: Build kernel image
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+          export ARCH=arm64 SUBARCH=arm64
+          export PATH="$CLANG_DIR/bin:$PATH"
+          export KBUILD_BUILD_USER KBUILD_BUILD_HOST
+          # keep the version string clean (no -dirty from the shallow clone)
+          [ -f scripts/setlocalversion ] && sed -i 's/-dirty//g' scripts/setlocalversion || true
+          ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
+
+          make -j"$(nproc)" O=out \
+            ARCH=arm64 \
+            CC="ccache clang" \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            LLVM_IAS=1
+
+          IMG=out/arch/arm64/boot/Image.gz-dtb
+          [ -f "$IMG" ] || { echo "ERROR: $IMG not produced"; exit 1; }
+          ls -lh "$IMG"
+          ccache -s | grep -iE 'hit rate|cache size' || true
+
+      - name: Package AnyKernel3 zip
+        run: |
+          set -euo pipefail
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+          rm -rf ak3/.git
+          # use this repo's raphael-customised anykernel.sh (device check, block=boot)
+          cp "$GITHUB_WORKSPACE/AnyKernel3/anykernel.sh" ak3/anykernel.sh
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb ak3/Image.gz-dtb
+          NAME="raphael-docker-kernel-${{ inputs.kernel_branch }}-$(date +%Y%m%d).zip"
+          ( cd ak3 && zip -r9 "../$NAME" . -x '.git*' 'README.md' >/dev/null )
+          echo "ZIP_NAME=$NAME" >> "$GITHUB_ENV"
+          ls -lh "$NAME"
+
+      - name: Upload kernel zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: raphael-docker-kernel
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 30
+
+      - name: Upload raw image + .config
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raphael-image-and-config
+          path: |
+            kernel/out/arch/arm64/boot/Image.gz-dtb
+            kernel/out/.config
+          retention-days: 7
+          if-no-files-found: ignore
