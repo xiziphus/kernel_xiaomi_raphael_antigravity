@@ -202,4 +202,5 @@ jobs:
             kernel/out/arch/arm64/boot/Image.gz-dtb
             kernel/out/.config
           retention-days: 7
+          include-hidden-files: true
           if-no-files-found: ignore
