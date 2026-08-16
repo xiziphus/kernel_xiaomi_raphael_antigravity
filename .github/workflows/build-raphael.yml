@@ -178,6 +178,25 @@ jobs:
             sed -i -E 's#^(\$\(obj\)/config_data\.gz:) arch/arm64/configs/[^ ]+#\1 $(KCONFIG_CONFIG)#' kernel/Makefile
             grep -nE '^\$\(obj\)/config_data\.gz:' kernel/Makefile
           fi
+
+          # Drop Makefile references to arch/arm64/kernel sources the tree
+          # deleted. bool-x removed perf_trace_counters.c and perf_trace_user.c
+          # but kept the `ifeq ($(CONFIG_TRACING),y)` rule that builds them.
+          # That is dormant while the tree ships FTRACE off, and becomes fatal
+          # the moment TRACING is enabled for BPF_EVENTS:
+          #   No rule to make target 'arch/arm64/kernel/perf_trace_counters.o'
+          # These are CAF perf-counter tracing extras, unrelated to BPF or
+          # Docker; perf_event.o is built separately outside the guard. Only
+          # objects whose .c is genuinely absent are removed, so trees that do
+          # ship them (Helium oss-base) are untouched.
+          for o in perf_trace_counters perf_trace_user; do
+            if [ ! -f "arch/arm64/kernel/$o.c" ] \
+               && grep -q "$o\.o" arch/arm64/kernel/Makefile 2>/dev/null; then
+              echo "dropping $o.o from arch/arm64/kernel/Makefile (source not in tree)"
+              sed -i -E "s/(^|[[:space:]])$o\.o//g" arch/arm64/kernel/Makefile
+            fi
+          done
+
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
           echo "=== base defconfig: ${{ inputs.defconfig }} ==="
