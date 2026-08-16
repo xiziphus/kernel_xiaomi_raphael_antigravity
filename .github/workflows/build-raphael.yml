@@ -221,6 +221,33 @@ jobs:
           CONFIG_LITTLE_CPU_MASK=15
           CONFIG_BIG_CPU_MASK=112
           CONFIG_PRIME_CPU_MASK=128
+          # --- BPF_EVENTS: required or Android will not boot on this kernel ---
+          # bpfloader is a `critical` init service. When it fails, init reboots
+          # and records `reboot,bpfloader-failed` in
+          # persist.sys.boot.reason.history -- exactly what a bool-x
+          # 16-HyperMiui build did on KameOS after otherwise booting fine
+          # (kernel up, init running: the furthest any custom kernel got).
+          # Android 16 ships tracepoint BPF programs (timeInState.bpf,
+          # gpuWork.o, memevents) that need BPF_PROG_TYPE_TRACEPOINT, which
+          # exists only with CONFIG_BPF_EVENTS. On 4.14 BPF_EVENTS is
+          # `def_bool y` gated on BPF_SYSCALL && (KPROBE_EVENTS ||
+          # UPROBE_EVENTS) && PERF_EVENTS -- and those need FTRACE/TRACING. A
+          # tree shipping `# CONFIG_FTRACE is not set` (bool-x does) therefore
+          # silently cannot boot Android 16, with no config check to catch it.
+          #
+          # FUNCTION_TRACER stays OFF: *that* is the pairing that breaks these
+          # trees (drivers/android/binder_trace.h undeclared
+          # binder_command_strings). Plain FTRACE is proven -- the InfinityX
+          # 4.14.356-openela-rc1-perf kernel that ran Docker on this device for
+          # days carried exactly this set. LTO_CLANG coexists fine because
+          # arm64 selects HAVE_C_RECORDMCOUNT.
+          CONFIG_FTRACE=y
+          # CONFIG_FUNCTION_TRACER is not set
+          # CONFIG_FTRACE_SYSCALLS is not set
+          # CONFIG_FTRACE_STARTUP_TEST is not set
+          CONFIG_UPROBES=y
+          CONFIG_UPROBE_EVENTS=y
+          CONFIG_BPF_EVENTS=y
           FRAG
           sed -i 's/^          //' /tmp/ikconfig.config
           ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
