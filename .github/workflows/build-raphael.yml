@@ -152,6 +152,19 @@ jobs:
           rm -rf out && mkdir -p out
           [ -f scripts/setlocalversion ] && sed -i 's/-dirty//g' scripts/setlocalversion || true
 
+          # Backported dtc vs 4.14 host-tool plumbing.
+          # Some trees (HeliumStudio's) ship a newer scripts/dtc that builds
+          # yamltree.o and asks for the library via HOSTLDLIBS_dtc, but 4.14's
+          # scripts/Makefile.host only reads HOSTLOADLIBES_<target>. The object
+          # compiles, -lyaml is never passed, and the host tool dies with a wall
+          # of "undefined reference to `yaml_emitter_emit'" before any kernel
+          # code is built. Alias the old name to the new one.
+          if grep -q 'HOSTLDLIBS_dtc' scripts/dtc/Makefile 2>/dev/null \
+             && ! grep -q 'HOSTLOADLIBES_dtc' scripts/dtc/Makefile; then
+            echo 'aliasing HOSTLOADLIBES_dtc -> HOSTLDLIBS_dtc for 4.14 Makefile.host'
+            echo 'HOSTLOADLIBES_dtc := $(HOSTLDLIBS_dtc)' >> scripts/dtc/Makefile
+          fi
+
           # Make the embedded config (and /proc/config.gz) tell the truth.
           # Several raphael trees carry Sultan Alsawaf's "use the stock raphael
           # config for /proc/config.gz" patch, which points config_data.gz at a
