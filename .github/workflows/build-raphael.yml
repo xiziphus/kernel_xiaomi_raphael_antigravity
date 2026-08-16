@@ -42,6 +42,16 @@ on:
         required: false
         type: string
         default: '-Docker-CI'
+      stock_only:
+        description: 'true = build the tree UNMODIFIED (no docker.config, no injected fragment). A control: proves whether the tree itself boots the ROM before blaming our options.'
+        required: false
+        type: string
+        default: 'false'
+      enable_tracing:
+        description: 'true = add FTRACE/TRACING/UPROBE_EVENTS/BPF_EVENTS. Off by default: KameOS''s own working kernel has tracing entirely disabled, so this is NOT needed to satisfy bpfloader, and it breaks trees that never compiled with it.'
+        required: false
+        type: string
+        default: 'false'
 
 jobs:
   build:
@@ -281,20 +291,26 @@ jobs:
           # persist.sys.boot.reason.history -- exactly what a bool-x
           # 16-HyperMiui build did on KameOS after otherwise booting fine
           # (kernel up, init running: the furthest any custom kernel got).
-          # Android 16 ships tracepoint BPF programs (timeInState.bpf,
-          # gpuWork.o, memevents) that need BPF_PROG_TYPE_TRACEPOINT, which
-          # exists only with CONFIG_BPF_EVENTS. On 4.14 BPF_EVENTS is
-          # `def_bool y` gated on BPF_SYSCALL && (KPROBE_EVENTS ||
-          # UPROBE_EVENTS) && PERF_EVENTS -- and those need FTRACE/TRACING. A
-          # tree shipping `# CONFIG_FTRACE is not set` (bool-x does) therefore
-          # silently cannot boot Android 16, with no config check to catch it.
-          #
-          # FUNCTION_TRACER stays OFF: *that* is the pairing that breaks these
-          # trees (drivers/android/binder_trace.h undeclared
-          # binder_command_strings). Plain FTRACE is proven -- the InfinityX
-          # 4.14.356-openela-rc1-perf kernel that ran Docker on this device for
-          # days carried exactly this set. LTO_CLANG coexists fine because
-          # arm64 selects HAVE_C_RECORDMCOUNT.
+          FRAG
+          sed -i 's/^          //' /tmp/ikconfig.config
+
+          # Optional tracing block -- OFF by default, and deliberately so.
+          # The first theory for `reboot,bpfloader-failed` was a missing
+          # CONFIG_BPF_EVENTS, since Android 16 ships tracepoint BPF programs
+          # (timeInState.bpf, gpuWork.o, memevents). That theory is DISPROVEN:
+          # KameOS's own kernel boots and gets past bpfloader while containing
+          # no tracepoint name strings at all -- sched_switch, cpu_frequency
+          # and cgroup_attach_task are absent from the image -- i.e. it has
+          # FTRACE/TRACING entirely off. bpfloader therefore tolerates
+          # tracepoint programs it cannot load, and tracing is not required to
+          # boot. Enabling it also costs three separate build failures in trees
+          # that never compiled with it (deleted perf_trace_counters.c,
+          # duplicate __tracepoint_bus_*). Kept behind a flag purely as a
+          # debugging aid. FUNCTION_TRACER must stay off regardless -- that is
+          # the pairing that breaks binder_trace.h on these trees.
+          if [ "${{ inputs.enable_tracing }}" = "true" ]; then
+            echo "enable_tracing=true: adding FTRACE/UPROBES/BPF_EVENTS"
+            cat >> /tmp/ikconfig.config <<'TRACEFRAG'
           CONFIG_FTRACE=y
           # CONFIG_FUNCTION_TRACER is not set
           # CONFIG_FTRACE_SYSCALLS is not set
@@ -302,10 +318,24 @@ jobs:
           CONFIG_UPROBES=y
           CONFIG_UPROBE_EVENTS=y
           CONFIG_BPF_EVENTS=y
-          FRAG
-          sed -i 's/^          //' /tmp/ikconfig.config
-          ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
-            "${FRAGS[@]}" "$GITHUB_WORKSPACE/docker.config" /tmp/ikconfig.config
+          TRACEFRAG
+            sed -i 's/^          //' /tmp/ikconfig.config
+          fi
+
+          # stock_only: build the tree with only the fragment the CI itself
+          # needs (IKCONFIG so the image is inspectable, and the CPU masks
+          # without which Kconfig aborts on NEW symbols) and NO docker.config.
+          # This is the control that separates "this tree cannot run this ROM"
+          # from "our Docker options broke it" -- worth one build before
+          # concluding anything about a boot failure.
+          if [ "${{ inputs.stock_only }}" = "true" ]; then
+            echo "=== stock_only: merging ONLY the CI fragment (no docker.config) ==="
+            ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
+              "${FRAGS[@]}" /tmp/ikconfig.config
+          else
+            ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
+              "${FRAGS[@]}" "$GITHUB_WORKSPACE/docker.config" /tmp/ikconfig.config
+          fi
 
           echo "=== drop invalid/empty symbol values before Kconfig sees them ==="
           # An empty value for a symbol this tree defines as non-empty makes the
@@ -317,10 +347,15 @@ jobs:
 
           echo "=== pre-build config check ==="
           fail=0
-          for o in NAMESPACES PID_NS NET_NS CGROUP_PIDS CGROUP_DEVICE POSIX_MQUEUE \
-                   OVERLAY_FS VETH BRIDGE NETFILTER_XT_MATCH_ADDRTYPE NF_NAT; do
-            grep -q "^CONFIG_${o}=y" out/.config || { echo "FATAL: CONFIG_${o} lost at config time"; fail=1; }
-          done
+          if [ "${{ inputs.stock_only }}" = "true" ]; then
+            echo "stock_only: skipping the Docker-option check by design -- this"
+            echo "build is a boot control and is EXPECTED to lack them."
+          else
+            for o in NAMESPACES PID_NS NET_NS CGROUP_PIDS CGROUP_DEVICE POSIX_MQUEUE \
+                     OVERLAY_FS VETH BRIDGE NETFILTER_XT_MATCH_ADDRTYPE NF_NAT; do
+              grep -q "^CONFIG_${o}=y" out/.config || { echo "FATAL: CONFIG_${o} lost at config time"; fail=1; }
+            done
+          fi
           if grep -q "^CONFIG_LLVM_POLLY=y" out/.config; then
             echo "FATAL: LLVM_POLLY on -- build will hang"; fail=1
           fi
@@ -339,9 +374,18 @@ jobs:
         run: |
           # Reads the config embedded inside the built kernel -- the only check
           # that cannot be invalidated by a later Kconfig re-resolution.
-          python3 scripts/verify_kernel_config.py \
-            kernel/out/arch/arm64/boot/Image.gz-dtb \
-            --dump built-kernel.config
+          if [ "${{ inputs.stock_only }}" = "true" ]; then
+            # A stock control build has no Docker options on purpose; still dump
+            # the embedded config so the image stays inspectable.
+            python3 scripts/verify_kernel_config.py \
+              kernel/out/arch/arm64/boot/Image.gz-dtb \
+              --dump built-kernel.config --require '' || true
+            echo "stock_only: Docker options intentionally absent (boot control)"
+          else
+            python3 scripts/verify_kernel_config.py \
+              kernel/out/arch/arm64/boot/Image.gz-dtb \
+              --dump built-kernel.config
+          fi
 
       - name: Package AnyKernel3 zip
         run: |
