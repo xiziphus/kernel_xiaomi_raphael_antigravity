@@ -200,23 +200,28 @@ jobs:
           # De-duplicate tracepoint instantiation. A trace header may be
           # instantiated by exactly ONE .c: `#define CREATE_TRACE_POINTS` emits
           # the __tracepoint_* objects, and every other user just includes the
-          # header for declarations. Two Qualcomm subsystems in these trees
-          # instantiate the same header from two files that are BOTH built:
+          # header for declarations. In drivers/soc/qcom/msm_bus/Makefile BOTH
+          # msm_bus_core.o (obj-y) and msm_bus_rules.o (obj-y, inside an enabled
+          # ifdef QCOM_BUS_CONFIG_RPMH) are built, and both instantiate
+          # trace_msm_bus.h. With tracing off the macros are no-ops and nothing
+          # collides; with TRACING=y (needed for BPF_EVENTS) ld.lld fails with
+          #   duplicate symbol: __tracepoint_bus_update_request   (+9 more)
+          # Strip the define from the non-core file so exactly one translation
+          # unit owns the symbols.
           #
-          #   trace_msm_bus.h        msm_bus_core.c (obj-y) + msm_bus_rules.c (obj-y)
-          #   trace_msm_low_power.h  lpm-levels-legacy.c (obj-y) + lpm-levels.c (CONFIG_MSM_PM=y)
-          #
-          # With tracing off the macros are no-ops and nothing collides, so the
-          # bug is invisible; with TRACING=y (needed for BPF_EVENTS) ld.lld
-          # fails with "duplicate symbol: __tracepoint_bus_update_request" and
-          # friends. Strip the define from the conditional file of each pair and
-          # leave it in the always-built one, so some file always owns it.
-          # Audited across the whole tree: the other 7 multiply-instantiated
-          # headers are per-arch or config-disabled here (AIS, IPA v2,
-          # QCOM_SCM_QCPE, KVM all off), so these two are the complete set.
+          # ONLY list pairs where BOTH files genuinely compile. Learned the hard
+          # way: drivers/cpuidle's lpm-levels.c and lpm-levels-legacy.c also both
+          # instantiate trace_msm_low_power.h, but their Makefile is an
+          # ifeq(CONFIG_MSM_PM_LEGACY,y)/else, so they are mutually exclusive --
+          # only lpm-levels.c builds here. Adding that pair stripped the define
+          # from the sole compiled file and produced the mirror-image failure,
+          # "undefined symbol: __tracepoint_cluster_enter". Read the Makefile's
+          # conditionals; do not infer from which line mentions the object.
+          # Rest of the tree audited: the other multiply-instantiated headers are
+          # per-arch or config-disabled here (MSM_AIS, IPA v2, QCOM_SCM_QCPE,
+          # KVM/VIRTUALIZATION all off).
           for pair in \
-            "drivers/soc/qcom/msm_bus/msm_bus_rules.c|drivers/soc/qcom/msm_bus/msm_bus_core.c|trace_msm_bus.h" \
-            "drivers/cpuidle/lpm-levels.c|drivers/cpuidle/lpm-levels-legacy.c|trace_msm_low_power.h"; do
+            "drivers/soc/qcom/msm_bus/msm_bus_rules.c|drivers/soc/qcom/msm_bus/msm_bus_core.c|trace_msm_bus.h"; do
             strip="${pair%%|*}"; rest="${pair#*|}"; keep="${rest%%|*}"; hdr="${rest##*|}"
             if [ -f "$strip" ] && [ -f "$keep" ] \
                && grep -q '^#define CREATE_TRACE_POINTS' "$strip" \
