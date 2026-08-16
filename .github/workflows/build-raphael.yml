@@ -207,9 +207,17 @@ jobs:
           # tries to prompt and dies with "(NEW) aborted!". The values are
           # raphael's 4+3+1 layout, matching SOVIET's raphael_defconfig:
           # 15 = cores 0-3, 112 = cores 4-6, 128 = core 7.
+          # KALLSYMS_ALL: emit a full symbol table so the built kernel can be
+          # compared against a ROM's own kernel with kallsyms-finder. KameOS's
+          # image yields 60801 real symbols -- the only trustworthy description
+          # of what it actually contains, since its embedded config is a decoy.
+          # Ours had no table at all ("0 candidates for kallsyms_token_table"),
+          # so there was nothing to diff against when hunting the boot failure.
           cat > /tmp/ikconfig.config <<'FRAG'
           CONFIG_IKCONFIG=y
           CONFIG_IKCONFIG_PROC=y
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
           CONFIG_LITTLE_CPU_MASK=15
           CONFIG_BIG_CPU_MASK=112
           CONFIG_PRIME_CPU_MASK=128
