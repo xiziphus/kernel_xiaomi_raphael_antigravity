@@ -23,7 +23,12 @@ on:
         type: string
         default: '16.0'
       defconfig:
-        description: 'Base defconfig'
+        description: 'Defconfig in the kernel tree, OR a config file committed in this repo (e.g. kameos_defconfig) which is then layered over tree_defconfig'
+        required: false
+        type: string
+        default: 'raphael_defconfig'
+      tree_defconfig:
+        description: "The kernel tree's own defconfig; used as the base when `defconfig` names a repo config file"
         required: false
         type: string
         default: 'raphael_defconfig'
