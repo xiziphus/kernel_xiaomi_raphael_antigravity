@@ -197,6 +197,36 @@ jobs:
             fi
           done
 
+          # De-duplicate tracepoint instantiation. A trace header may be
+          # instantiated by exactly ONE .c: `#define CREATE_TRACE_POINTS` emits
+          # the __tracepoint_* objects, and every other user just includes the
+          # header for declarations. Two Qualcomm subsystems in these trees
+          # instantiate the same header from two files that are BOTH built:
+          #
+          #   trace_msm_bus.h        msm_bus_core.c (obj-y) + msm_bus_rules.c (obj-y)
+          #   trace_msm_low_power.h  lpm-levels-legacy.c (obj-y) + lpm-levels.c (CONFIG_MSM_PM=y)
+          #
+          # With tracing off the macros are no-ops and nothing collides, so the
+          # bug is invisible; with TRACING=y (needed for BPF_EVENTS) ld.lld
+          # fails with "duplicate symbol: __tracepoint_bus_update_request" and
+          # friends. Strip the define from the conditional file of each pair and
+          # leave it in the always-built one, so some file always owns it.
+          # Audited across the whole tree: the other 7 multiply-instantiated
+          # headers are per-arch or config-disabled here (AIS, IPA v2,
+          # QCOM_SCM_QCPE, KVM all off), so these two are the complete set.
+          for pair in \
+            "drivers/soc/qcom/msm_bus/msm_bus_rules.c|drivers/soc/qcom/msm_bus/msm_bus_core.c|trace_msm_bus.h" \
+            "drivers/cpuidle/lpm-levels.c|drivers/cpuidle/lpm-levels-legacy.c|trace_msm_low_power.h"; do
+            strip="${pair%%|*}"; rest="${pair#*|}"; keep="${rest%%|*}"; hdr="${rest##*|}"
+            if [ -f "$strip" ] && [ -f "$keep" ] \
+               && grep -q '^#define CREATE_TRACE_POINTS' "$strip" \
+               && grep -q '^#define CREATE_TRACE_POINTS' "$keep" \
+               && grep -q "$hdr" "$strip" && grep -q "$hdr" "$keep"; then
+              echo "tracepoints for $hdr owned by $keep; stripping CREATE_TRACE_POINTS from $strip"
+              sed -i '/^#define CREATE_TRACE_POINTS$/d' "$strip"
+            fi
+          done
+
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
           echo "=== base defconfig: ${{ inputs.defconfig }} ==="
