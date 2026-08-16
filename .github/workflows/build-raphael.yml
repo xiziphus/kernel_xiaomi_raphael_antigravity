@@ -144,21 +144,32 @@ jobs:
 
           echo "=== base defconfig: ${{ inputs.defconfig }} ==="
           DEF="${{ inputs.defconfig }}"
+          FRAGS=()
           if [ -f "$GITHUB_WORKSPACE/$DEF" ]; then
-            # a full config file committed in this repo (e.g. kameos_defconfig)
-            echo "using repo-provided config file: $DEF"
-            cp "$GITHUB_WORKSPACE/$DEF" arch/arm64/configs/ci_base_defconfig
-            make "${MK[@]}" ci_base_defconfig
+            # A full config lifted from another ROM's kernel (e.g. kameos_defconfig,
+            # extracted from KameOS's own image). It must be layered ON TOP of this
+            # tree's defconfig, never used as the base: a foreign config omits
+            # symbols this tree requires -- LITTLE_CPU_MASK/BIG_CPU_MASK/PRIME_CPU_MASK
+            # came out empty, Kconfig rejected the empty values, the symbols became
+            # NEW, and the build's silentoldconfig tried to prompt and aborted.
+            echo "layering repo config '$DEF' over ${{ inputs.tree_defconfig }}"
+            make "${MK[@]}" "${{ inputs.tree_defconfig }}"
+            FRAGS+=("$GITHUB_WORKSPACE/$DEF")
           else
             make "${MK[@]}" "$DEF"
           fi
 
-          echo "=== merge docker.config fragment ==="
+          echo "=== merge fragments (ROM config, docker.config, ikconfig) ==="
           # IKCONFIG is required so the built image carries its own config and
           # the verify step below can inspect what was ACTUALLY compiled.
           printf 'CONFIG_IKCONFIG=y\nCONFIG_IKCONFIG_PROC=y\n' > /tmp/ikconfig.config
           ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
-            "$GITHUB_WORKSPACE/docker.config" /tmp/ikconfig.config
+            "${FRAGS[@]}" "$GITHUB_WORKSPACE/docker.config" /tmp/ikconfig.config
+
+          echo "=== drop invalid/empty symbol values before Kconfig sees them ==="
+          # An empty value for a symbol this tree defines as non-empty makes the
+          # symbol NEW again, which is what aborts the build later.
+          sed -i -E '/^CONFIG_[A-Z0-9_]+=""$/d' out/.config
 
           echo "=== olddefconfig (same env as the build) ==="
           make "${MK[@]}" olddefconfig
