@@ -74,6 +74,54 @@ def extract_config(path: str) -> str:
     )
 
 
+def banner_version(path: str) -> str:
+    """The kernel's own 'Linux version X.Y.Z...' string."""
+    raw = open(path, "rb").read()
+    for blob in (raw, *( [gunzip_at(raw, raw.find(b"\x1f\x8b\x08"))]
+                         if raw.find(b"\x1f\x8b\x08") >= 0 else [] )):
+        m = re.search(rb"Linux version (\d+\.\d+\.\d+)", blob)
+        if m:
+            return m.group(1).decode()
+    return ""
+
+
+def decoy_check(path: str, config: str) -> None:
+    """Refuse to verify a kernel whose embedded config is a decoy.
+
+    Several raphael trees (SOVIET-ANDROID, HeliumStudio, VoltageOS, rikka...)
+    carry Sultan Alsawaf's "use the stock raphael config for /proc/config.gz"
+    patch, which rewrites kernel/Makefile:
+
+        $(obj)/config_data.gz: arch/arm64/configs/raphael-vts_defconfig FORCE
+
+    instead of the normal $(KCONFIG_CONFIG). The image then embeds a checked-in
+    defconfig -- NOT what was compiled -- and /proc/config.gz serves that same
+    lie at runtime. Verified 2026-08-17: a SOVIET 4.14.357 build embedded
+    raphael-vts_defconfig (4.14.226) verbatim, which says
+    '# CONFIG_PID_NS is not set' regardless of what the build actually enabled.
+
+    The tell is the version: the config header declares a different kernel than
+    the banner. When that happens the only trustworthy sources are the build's
+    own out/.config / out/include/generated/autoconf.h, or a functional check on
+    the running device (/proc/cgroups, /proc/self/ns, /proc/filesystems).
+    """
+    m = re.search(r"^# Linux/\S+ (\d+\.\d+\.\d+) Kernel Configuration", config, re.M)
+    if not m:
+        return
+    cfg_ver, kern_ver = m.group(1), banner_version(path)
+    if kern_ver and cfg_ver != kern_ver:
+        sys.exit(
+            f"FATAL: embedded config is a DECOY, not this kernel's config.\n"
+            f"       kernel banner says {kern_ver}, embedded config says {cfg_ver}.\n"
+            f"       This tree redirects config_data.gz at a checked-in defconfig,\n"
+            f"       so neither this check nor /proc/config.gz can tell you what was\n"
+            f"       compiled. Verify against the build's out/.config (post-build) or\n"
+            f"       functionally on-device: /proc/cgroups, /proc/self/ns, unshare.\n"
+            f"       To make builds honest, point config_data.gz back at\n"
+            f"       $(KCONFIG_CONFIG) in kernel/Makefile."
+        )
+
+
 def state_of(config: str, opt: str) -> str:
     """Return 'y', 'm', a literal value, 'n' (explicitly unset), or 'absent'."""
     m = re.search(rf"^CONFIG_{re.escape(opt)}=(.*)$", config, re.M)
@@ -95,6 +143,7 @@ def main() -> int:
     config = extract_config(args.image)
     if args.dump:
         open(args.dump, "w").write(config)
+    decoy_check(args.image, config)
 
     banner = re.search(r"^CONFIG_LOCALVERSION=.*$", config, re.M)
     total = len(re.findall(r"^CONFIG_\w+=", config, re.M))

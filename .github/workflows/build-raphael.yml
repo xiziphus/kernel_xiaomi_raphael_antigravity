@@ -145,6 +145,20 @@ jobs:
 
           rm -rf out && mkdir -p out
           [ -f scripts/setlocalversion ] && sed -i 's/-dirty//g' scripts/setlocalversion || true
+
+          # Make the embedded config (and /proc/config.gz) tell the truth.
+          # Several raphael trees carry Sultan Alsawaf's "use the stock raphael
+          # config for /proc/config.gz" patch, which points config_data.gz at a
+          # checked-in defconfig instead of $(KCONFIG_CONFIG). SOVIET-ANDROID@16.0
+          # embeds raphael-vts_defconfig (4.14.226) into a 4.14.357 kernel, so the
+          # image reports '# CONFIG_PID_NS is not set' no matter what was built --
+          # which is exactly what fooled the 2026-08-17 investigation.
+          if grep -qE '^\$\(obj\)/config_data\.gz: arch/arm64/configs/' kernel/Makefile 2>/dev/null; then
+            echo "neutralising the /proc/config.gz decoy in kernel/Makefile:"
+            grep -nE '^\$\(obj\)/config_data\.gz:' kernel/Makefile
+            sed -i -E 's#^(\$\(obj\)/config_data\.gz:) arch/arm64/configs/[^ ]+#\1 $(KCONFIG_CONFIG)#' kernel/Makefile
+            grep -nE '^\$\(obj\)/config_data\.gz:' kernel/Makefile
+          fi
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
           echo "=== base defconfig: ${{ inputs.defconfig }} ==="
