@@ -200,7 +200,21 @@ jobs:
           echo "=== merge fragments (ROM config, docker.config, ikconfig) ==="
           # IKCONFIG is required so the built image carries its own config and
           # the verify step below can inspect what was ACTUALLY compiled.
-          printf 'CONFIG_IKCONFIG=y\nCONFIG_IKCONFIG_PROC=y\n' > /tmp/ikconfig.config
+          # IKCONFIG so the image carries its own config; plus raphael's CPU
+          # topology. LITTLE/BIG/PRIME_CPU_MASK are `int` symbols with NO
+          # default in arch/arm64/Kconfig. Trees whose defconfig omits them
+          # (hxsyzl@16.0-raphael) leave them NEW, so the build's silentoldconfig
+          # tries to prompt and dies with "(NEW) aborted!". The values are
+          # raphael's 4+3+1 layout, matching SOVIET's raphael_defconfig:
+          # 15 = cores 0-3, 112 = cores 4-6, 128 = core 7.
+          cat > /tmp/ikconfig.config <<'FRAG'
+          CONFIG_IKCONFIG=y
+          CONFIG_IKCONFIG_PROC=y
+          CONFIG_LITTLE_CPU_MASK=15
+          CONFIG_BIG_CPU_MASK=112
+          CONFIG_PRIME_CPU_MASK=128
+          FRAG
+          sed -i 's/^          //' /tmp/ikconfig.config
           ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
             "${FRAGS[@]}" "$GITHUB_WORKSPACE/docker.config" /tmp/ikconfig.config
 
