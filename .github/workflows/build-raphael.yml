@@ -78,7 +78,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex libelf-dev libssl-dev ccache \
             lz4 zip unzip python3 cpio wget git \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            libyaml-dev
+          # libyaml-dev: some trees (HeliumStudio's, and other newer dtc
+          # backports) build scripts/dtc with YAML output support. Without the
+          # library the host tool fails to link with a wall of
+          # "undefined reference to `yaml_emitter_emit'" before any kernel code
+          # is compiled.
 
       - name: Cache ccache
         uses: actions/cache@v4
