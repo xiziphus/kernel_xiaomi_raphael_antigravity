@@ -114,64 +114,82 @@ jobs:
           fi
           free -h
 
-      - name: Configure kernel (raphael_defconfig + docker.config)
-        working-directory: kernel
-        run: |
-          set -euo pipefail
-          export ARCH=arm64 SUBARCH=arm64
-          export PATH="$CLANG_DIR/bin:$PATH"
-          rm -rf out && mkdir -p out
-
-          echo "=== base defconfig ==="
-          make O=out ARCH=arm64 "${{ inputs.defconfig }}"
-
-          echo "=== merge docker.config fragment ==="
-          ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
-            "$GITHUB_WORKSPACE/docker.config"
-
-          echo "=== olddefconfig ==="
-          make O=out ARCH=arm64 olddefconfig
-
-          echo "=== retention check: critical Docker options must survive ==="
-          fail=0
-          for o in NAMESPACES PID_NS NET_NS CGROUP_PIDS CGROUP_DEVICE POSIX_MQUEUE \
-                   OVERLAY_FS VETH BRIDGE NETFILTER_XT_MATCH_ADDRTYPE NF_NAT NF_TABLES; do
-            if ! grep -q "^CONFIG_${o}=y" out/.config; then
-              echo "FATAL: CONFIG_${o} did not survive olddefconfig"; fail=1
-            fi
-          done
-          # POLLY must be OFF (it hangs the compile); JOURNEY.md invariant.
-          if grep -q "^CONFIG_LLVM_POLLY=y" out/.config; then
-            echo "FATAL: CONFIG_LLVM_POLLY is ON -- build will hang"; fail=1
-          fi
-          [ "$fail" = 0 ] && echo "config OK" || exit 1
-
-      - name: Build kernel image
+      - name: Configure + build kernel
         working-directory: kernel
         run: |
           set -euo pipefail
           export ARCH=arm64 SUBARCH=arm64
           export PATH="$CLANG_DIR/bin:$PATH"
           export KBUILD_BUILD_USER KBUILD_BUILD_HOST
-          # keep the version string clean (no -dirty from the shallow clone)
+
+          # Every make invocation below MUST use this identical variable set.
+          # Configuring with the host toolchain and then building with clang
+          # made Kconfig re-resolve at build time (`--silentoldconfig`) and
+          # silently drop dependency-gated options -- run 31884327458 passed
+          # its own "config OK" check and still shipped
+          # `# CONFIG_PID_NS is not set`. Same env for config and build.
+          MK=(O=out ARCH=arm64
+              CC="ccache clang"
+              CLANG_TRIPLE=aarch64-linux-gnu-
+              CROSS_COMPILE=aarch64-linux-gnu-
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+              CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+              LD=ld.lld AR=llvm-ar NM=llvm-nm
+              OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+              LLVM_IAS=1)
+
+          rm -rf out && mkdir -p out
           [ -f scripts/setlocalversion ] && sed -i 's/-dirty//g' scripts/setlocalversion || true
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
-          make -j"$(nproc)" O=out \
-            ARCH=arm64 \
-            CC="ccache clang" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            LD=ld.lld AR=llvm-ar NM=llvm-nm \
-            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            LLVM_IAS=1
+          echo "=== base defconfig: ${{ inputs.defconfig }} ==="
+          DEF="${{ inputs.defconfig }}"
+          if [ -f "$GITHUB_WORKSPACE/$DEF" ]; then
+            # a full config file committed in this repo (e.g. kameos_defconfig)
+            echo "using repo-provided config file: $DEF"
+            cp "$GITHUB_WORKSPACE/$DEF" arch/arm64/configs/ci_base_defconfig
+            make "${MK[@]}" ci_base_defconfig
+          else
+            make "${MK[@]}" "$DEF"
+          fi
+
+          echo "=== merge docker.config fragment ==="
+          # IKCONFIG is required so the built image carries its own config and
+          # the verify step below can inspect what was ACTUALLY compiled.
+          printf 'CONFIG_IKCONFIG=y\nCONFIG_IKCONFIG_PROC=y\n' > /tmp/ikconfig.config
+          ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config \
+            "$GITHUB_WORKSPACE/docker.config" /tmp/ikconfig.config
+
+          echo "=== olddefconfig (same env as the build) ==="
+          make "${MK[@]}" olddefconfig
+
+          echo "=== pre-build config check ==="
+          fail=0
+          for o in NAMESPACES PID_NS NET_NS CGROUP_PIDS CGROUP_DEVICE POSIX_MQUEUE \
+                   OVERLAY_FS VETH BRIDGE NETFILTER_XT_MATCH_ADDRTYPE NF_NAT; do
+            grep -q "^CONFIG_${o}=y" out/.config || { echo "FATAL: CONFIG_${o} lost at config time"; fail=1; }
+          done
+          if grep -q "^CONFIG_LLVM_POLLY=y" out/.config; then
+            echo "FATAL: LLVM_POLLY on -- build will hang"; fail=1
+          fi
+          [ "$fail" = 0 ] || exit 1
+          echo "pre-build config OK (authoritative check runs on the built image)"
+
+          echo "=== build ==="
+          make -j"$(nproc)" "${MK[@]}" Image.gz-dtb
 
           IMG=out/arch/arm64/boot/Image.gz-dtb
           [ -f "$IMG" ] || { echo "ERROR: $IMG not produced"; exit 1; }
           ls -lh "$IMG"
           ccache -s | grep -iE 'hit rate|cache size' || true
+
+      - name: Verify the COMPILED image (authoritative)
+        run: |
+          # Reads the config embedded inside the built kernel -- the only check
+          # that cannot be invalidated by a later Kconfig re-resolution.
+          python3 scripts/verify_kernel_config.py \
+            kernel/out/arch/arm64/boot/Image.gz-dtb \
+            --dump built-kernel.config
 
       - name: Package AnyKernel3 zip
         run: |
@@ -201,6 +219,7 @@ jobs:
           path: |
             kernel/out/arch/arm64/boot/Image.gz-dtb
             kernel/out/.config
+            built-kernel.config
           retention-days: 7
           include-hidden-files: true
           if-no-files-found: ignore
