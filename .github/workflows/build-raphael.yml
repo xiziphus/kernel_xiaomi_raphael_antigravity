@@ -255,6 +255,35 @@ jobs:
           # min_kver-gated 4.17-5.10 cgroup hooks all check out).
           python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_map_types.py"
 
+          # Give ramoops a console buffer, so a boot that fails in userspace
+          # leaves a readable kernel log behind. bool-x reserves 8 MB at
+          # 0xa1600000 but allocates only record-size + pmsg-size, so the
+          # console is never captured and a failed boot tells you nothing.
+          # Android's BootReceiver copies the console record into dropbox on the
+          # next boot, which is readable WITHOUT root:
+          #   adb shell dumpsys dropbox --print SYSTEM_LAST_KMSG
+          # That is the only post-mortem channel on a locked-down user build --
+          # /sys/fs/pstore itself is SELinux-blocked for shell. ecc-size is
+          # zeroed so the record layout matches what the ROM's own pstore reader
+          # expects; a mismatched ECC config makes the records unreadable.
+          for dts in arch/arm64/boot/dts/qcom/sm8150.dtsi; do
+            [ -f "$dts" ] || continue
+            python3 - "$dts" <<'PY'
+          import re,sys
+          p=sys.argv[1]; s=open(p).read()
+          if 'ramoops@a1600000' not in s: raise SystemExit(0)
+          tail=s.split('ramoops@a1600000')[1][:400]
+          if 'console-size' in tail:
+              print("  ramoops: console-size already present"); raise SystemExit(0)
+          s=re.sub(r'(ramoops@a1600000\s*\{(?:[^}]*?))(pmsg-size\s*=\s*<[^>]*>;)',
+                   r'\1\2\n\t\t\tconsole-size = <0x200000>;', s, count=1)
+          s=re.sub(r'(ramoops@a1600000\s*\{(?:[^}]*?))ecc-size\s*=\s*<\s*\d+\s*>;',
+                   r'\1ecc-size = <0>;', s, count=1)
+          open(p,'w').write(s)
+          print("  ramoops: added console-size=0x200000, ecc-size=0")
+          PY
+          done
+
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
           echo "=== base defconfig: ${{ inputs.defconfig }} ==="
