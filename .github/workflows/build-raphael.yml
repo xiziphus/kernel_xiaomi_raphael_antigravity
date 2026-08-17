@@ -242,6 +242,19 @@ jobs:
             fi
           done
 
+          # Make BPF_MAP_TYPE_DEVMAP_HASH (25) creatable. This is THE reason a
+          # bool-x kernel boots KameOS and then dies with
+          # `reboot,bpfloader-failed`: the ROM's own
+          # /apex/com.android.tethering/etc/bpf/tethering/offload.o is marked
+          # `critical` and declares tether_dev_map as type 25 with
+          # min_kver=0 -- ungated, so it must be created on 4.14 too. bool-x's
+          # map enum stops at 15:SOCKMAP, so creation returns EINVAL and
+          # bpfloader exits non-zero. No-op on the openela lineage, which
+          # already has types up to 25. See the script header for why nothing
+          # else was missing (program types, helpers, instruction set and the
+          # min_kver-gated 4.17-5.10 cgroup hooks all check out).
+          python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_map_types.py"
+
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
           echo "=== base defconfig: ${{ inputs.defconfig }} ==="
