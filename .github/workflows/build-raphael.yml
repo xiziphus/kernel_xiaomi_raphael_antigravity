@@ -143,6 +143,49 @@ jobs:
         run: |
           git clone --depth=1 -b "${{ inputs.kernel_branch }}" \
             "${{ inputs.kernel_repo }}" "$KERNEL_DIR"
+
+          # Trees that carry KernelSU/SukiSU as a submodule clone empty, and then
+          # Kconfig dies with: can't open file "drivers/staging/kernelsu/kernel/Kconfig".
+          # Try to populate; if that fails, neutralise the dangling source lines so
+          # the tree still configures (we do not need KernelSU to test booting).
+          git -C "$KERNEL_DIR" submodule update --init --depth 1 --recursive 2>/dev/null || true
+          python3 - "$KERNEL_DIR" <<'FIXKCONFIG'
+          import os, re, sys
+          root = sys.argv[1]
+          fixed = 0
+          for dirpath, _d, files in os.walk(root):
+              if "/.git" in dirpath:
+                  continue
+              for fn in files:
+                  if fn != "Kconfig" and not fn.startswith("Kconfig."):
+                      continue
+                  p = os.path.join(dirpath, fn)
+                  try:
+                      txt = open(p, encoding="utf-8", errors="replace").read()
+                  except OSError:
+                      continue
+                  out, changed = [], False
+                  for line in txt.splitlines(True):
+                      m = re.match(r'\s*source\s+"?([^"\s]+)"?', line)
+                      if m and not os.path.exists(os.path.join(root, m.group(1))):
+                          out.append("# [ci] dropped missing source: " + line)
+                          changed = True
+                      else:
+                          out.append(line)
+                  if changed:
+                      open(p, "w", encoding="utf-8").write("".join(out))
+                      print("  Kconfig: dropped dangling source() in %s" % os.path.relpath(p, root))
+                      fixed += 1
+          print("  Kconfig: %d file(s) fixed" % fixed)
+          FIXKCONFIG
+
+          # Same class of problem in Makefiles: obj-y pointing at an empty submodule.
+          for d in drivers/staging/kernelsu drivers/kernelsu; do
+            if [ -d "$KERNEL_DIR/$d" ] && [ -z "$(ls -A "$KERNEL_DIR/$d" 2>/dev/null)" ]; then
+              echo "  removing empty submodule dir $d"
+              rmdir "$KERNEL_DIR/$d" 2>/dev/null || true
+            fi
+          done
           echo "--- kernel version ---"
           make -s -C "$KERNEL_DIR" kernelversion 2>/dev/null || \
             grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL)' "$KERNEL_DIR/Makefile" | head -3
