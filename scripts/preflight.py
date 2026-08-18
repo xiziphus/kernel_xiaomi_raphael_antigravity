@@ -8,6 +8,7 @@ in seconds against the GitHub API -- no clone. Exit code is non-zero if any
 BLOCKER is found; WARNs are advisory.
 """
 import json
+import re
 import subprocess
 import sys
 
@@ -65,8 +66,18 @@ if DEFCONFIG not in cfgs:
 # 2. appended-DTB target: 5.4/GKI trees have none, so Image.gz-dtb does not exist
 akc = text("arch/arm64/Kconfig") or ""
 if "BUILD_ARM64_APPENDED_DTB_IMAGE" not in akc:
-    blockers.append("no BUILD_ARM64_APPENDED_DTB_IMAGE in arch/arm64/Kconfig -- "
-                    "'make Image.gz-dtb' will fail; pass append_dtb=<base>.dtb")
+    warns.append("no BUILD_ARM64_APPENDED_DTB_IMAGE in arch/arm64/Kconfig -- "
+                 "'make Image.gz-dtb' will fail; you MUST pass append_dtb=<base>.dtb")
+    # and the named base must actually be reachable: msm trees gate the whole
+    # dts Makefile behind a MACH_* symbol, so dtb-y can be empty even though
+    # the .dts is sitting right there.
+    dmk = text("arch/arm64/boot/dts/qcom/Makefile") or ""
+    dts = [n for n in listdir("arch/arm64/boot/dts/qcom") if n.endswith(".dts")]
+    notes.append("qcom .dts available: %s" % " ".join(sorted(dts)[:8]))
+    gate = re.findall(r"ifeq \(\$\(CONFIG_(\w+)\),y\)", dmk)
+    if gate:
+        notes.append("dts Makefile gated on: %s -- these must be =y or dtb-y is EMPTY"
+                     % ", ".join(sorted(set(gate))))
 
 # 3. Makefile references to source files that were deleted from the tree
 amk = text("arch/arm64/kernel/Makefile") or ""
@@ -78,7 +89,6 @@ for obj in ("perf_trace_counters", "perf_trace_user"):
 
 # 4. the two BPF patch scripts must be able to no-op safely
 sysc = text("kernel/bpf/syscall.c") or ""
-import re
 for cmd in ("BPF_MAP_CREATE", "BPF_PROG_LOAD"):
     m = re.search(r"#define\s+%s_LAST_FIELD\s+(\S+)" % cmd, sysc)
     notes.append("%s_LAST_FIELD = %s" % (cmd, m.group(1) if m else "NOT FOUND"))

@@ -433,9 +433,20 @@ jobs:
             # device overlays come from the dtbo partition.
             APP="${{ inputs.append_dtb }}"
             [ -n "$APP" ] || { echo "Image.gz-dtb failed and no append_dtb given"; exit 1; }
-            make -j"$(nproc)" "${MK[@]}" Image.gz dtbs
+            make -j"$(nproc)" "${MK[@]}" Image.gz
+            make -j"$(nproc)" "${MK[@]}" dtbs || true
             BASE=$(find out/arch/arm64/boot/dts -name "$APP" | head -1)
-            [ -n "$BASE" ] || { echo "append_dtb '$APP' not built"; find out/arch/arm64/boot/dts -name '*.dtb' | head; exit 1; }
+            if [ -z "$BASE" ]; then
+              # Nothing put it in dtb-y (msm trees gate the whole dts Makefile
+              # behind a MACH_* symbol). Ask kbuild for the file directly.
+              SRC=$(find arch/arm64/boot/dts -name "${APP%.dtb}.dts" | head -1)
+              [ -n "$SRC" ] || { echo "no source ${APP%.dtb}.dts anywhere in the tree"; exit 1; }
+              REL="${SRC#*/}"; REL="arch/arm64/boot/dts/${SRC#arch/arm64/boot/dts/}"
+              echo "dtb not in dtb-y; building ${REL%.dts}.dtb explicitly"
+              make -j"$(nproc)" "${MK[@]}" "${REL%.dts}.dtb" || true
+              BASE=$(find out/arch/arm64/boot/dts -name "$APP" | head -1)
+            fi
+            [ -n "$BASE" ] || { echo "append_dtb '$APP' not built; available:"; find out/arch/arm64/boot/dts -name '*.dtb' | head -20; exit 1; }
             cat out/arch/arm64/boot/Image.gz "$BASE" > out/arch/arm64/boot/Image.gz-dtb
             echo "appended $BASE -> Image.gz-dtb"
           fi
