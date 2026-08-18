@@ -152,6 +152,22 @@ jobs:
           python3 - "$KERNEL_DIR" <<'FIXKCONFIG'
           import os, re, sys
           root = sys.argv[1]
+          # ONLY touch source() lines that point INTO a declared submodule that
+          # came back empty. An earlier, broader version of this matched
+          # `source "arch/$SRCARCH/Kconfig"` -- a variable path, not a missing
+          # file -- commented it out, and silently deleted whole Kconfig
+          # subtrees, which showed up as "CONFIG_* lost at config time".
+          gm = os.path.join(root, ".gitmodules")
+          subs = []
+          if os.path.exists(gm):
+              subs = re.findall(r"path\s*=\s*(\S+)", open(gm).read())
+          subs = [p for p in subs
+                  if not os.path.isdir(os.path.join(root, p))
+                  or not os.listdir(os.path.join(root, p))]
+          if not subs:
+              print("  Kconfig: no empty submodules, nothing to do")
+              raise SystemExit(0)
+          print("  Kconfig: empty submodule(s): %s" % " ".join(subs))
           fixed = 0
           for dirpath, _d, files in os.walk(root):
               if "/.git" in dirpath:
@@ -159,22 +175,25 @@ jobs:
               for fn in files:
                   if fn != "Kconfig" and not fn.startswith("Kconfig."):
                       continue
-                  p = os.path.join(dirpath, fn)
+                  fp = os.path.join(dirpath, fn)
                   try:
-                      txt = open(p, encoding="utf-8", errors="replace").read()
+                      txt = open(fp, encoding="utf-8", errors="replace").read()
                   except OSError:
                       continue
                   out, changed = [], False
                   for line in txt.splitlines(True):
                       m = re.match(r'\s*source\s+"?([^"\s]+)"?', line)
-                      if m and not os.path.exists(os.path.join(root, m.group(1))):
-                          out.append("# [ci] dropped missing source: " + line)
+                      tgt = m.group(1) if m else None
+                      if (tgt and "$" not in tgt
+                              and any(tgt.startswith(sp) for sp in subs)
+                              and not os.path.exists(os.path.join(root, tgt))):
+                          out.append("# [ci] empty submodule, dropped: " + line)
                           changed = True
                       else:
                           out.append(line)
                   if changed:
-                      open(p, "w", encoding="utf-8").write("".join(out))
-                      print("  Kconfig: dropped dangling source() in %s" % os.path.relpath(p, root))
+                      open(fp, "w", encoding="utf-8").write("".join(out))
+                      print("  Kconfig: %s" % os.path.relpath(fp, root))
                       fixed += 1
           print("  Kconfig: %d file(s) fixed" % fixed)
           FIXKCONFIG
