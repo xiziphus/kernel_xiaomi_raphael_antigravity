@@ -180,6 +180,28 @@ static inline int skb_flow_dissector_prog_query(const union bpf_attr *attr,
 #define BPF_CALL_ARGS(a, b, c, d, e, f) ({ (void)(a); 0; })
 #endif
 
+
+/* Raw-tracepoint BPF (5.0) and the kallsyms dump gate (4.18). Both donors'
+ * syscall.c want exactly these three, which is what made the sockopt graft
+ * look finishable: two independent donors converged on the same short list.
+ *
+ * Safe to stub on this tree. Rikka has no tracing at all -- no ftrace, no
+ * kprobes, no trace_call_bpf -- so refusing to register a raw tracepoint is the
+ * truthful answer rather than a degradation, and KameOS's own shipped kernel is
+ * in the same position. bpf_dump_raw_ok gates exposing raw instructions to
+ * userspace; returning false is the conservative choice.
+ */
+#ifndef BPF_TRANSPLANT_HAVE_RAW_TP
+struct bpf_raw_event_map;
+static inline bool bpf_dump_raw_ok(void) { return false; }
+static inline int bpf_probe_register(struct bpf_raw_event_map *btp,
+				     struct bpf_prog *prog)
+{ return -EOPNOTSUPP; }
+static inline int bpf_probe_unregister(struct bpf_raw_event_map *btp,
+				       struct bpf_prog *prog)
+{ return -EOPNOTSUPP; }
+#endif
+
 #endif /* _BPF_TRANSPLANT_COMPAT_H */
 SHIM
 
