@@ -346,6 +346,15 @@ jobs:
           #   adb shell su -c 'logcat -L -b all'                          (pmsg)
           python3 "$GITHUB_WORKSPACE/scripts/xiaomi_ramoops.py"
 
+          # Assert the patches we asked for actually landed. Three times a
+          # patch script has reported "applied" while changing nothing, and the
+          # resulting kernel looked like a failed theory rather than a failed
+          # patch. Fail here instead.
+          WANT_FAKE_UNAME="${{ inputs.fake_uname }}" \
+          WANT_RDONLY_PROG="${{ inputs.rdonly_prog_flag }}" \
+          WANT_DEVMAP_HASH="${{ inputs.bpf_devmap_hash }}" \
+            python3 "$GITHUB_WORKSPACE/scripts/verify_patches.py"
+
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
           echo "=== base defconfig: ${{ inputs.defconfig }} ==="
