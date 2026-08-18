@@ -461,6 +461,29 @@ jobs:
           echo "pre-build config OK (authoritative check runs on the built image)"
 
           echo "=== build ==="
+          # ---- SMOKE GATE -------------------------------------------------
+          # Static preflight cannot catch compile errors, and every recent
+          # failure was one: implicit declarations from a BPF graft, a missing
+          # header, a nested block comment in a generated shim. Build the small
+          # set of subsystems our patches actually touch FIRST, so a broken
+          # patch costs ~4 minutes instead of ~17. Nothing here is wasted work:
+          # these objects are needed by the full build anyway.
+          echo "=== smoke: compiling patched subsystems first ==="
+          SMOKE_FAIL=0
+          for tgt in kernel/bpf/ kernel/sys.o fs/pstore/ net/core/; do
+            echo "--- smoke: $tgt"
+            if ! make -j"$(nproc)" "${MK[@]}" "$tgt" 2>&1 | tail -40; then
+              SMOKE_FAIL=1; break
+            fi
+          done
+          if [ "$SMOKE_FAIL" = "1" ]; then
+            echo
+            echo "SMOKE FAILED -- a patched subsystem does not compile."
+            echo "Fix the patch before spending the rest of the build."
+            exit 1
+          fi
+          echo "=== smoke passed; continuing to the full image ==="
+
           if ! make -j"$(nproc)" "${MK[@]}" Image.gz-dtb; then
             # 5.4/GKI-style trees have no appended-DTB target. raphael's
             # bootloader still wants Image.gz with a base dtb concatenated;

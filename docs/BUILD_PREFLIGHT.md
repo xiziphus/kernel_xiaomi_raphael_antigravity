@@ -46,3 +46,25 @@ to `/dev/kmsg` on KameOS's own kernel, `adb reboot`, and finding
 `/sys/fs/pstore` empty. Only a panic survived. The fix is
 `qcom,force-warm-reboot` on the `qcom,pshold` node so the PMIC does a warm
 reset instead of re-initialising DDR.
+
+## What preflight CANNOT do
+
+It is a static checker. It reads the tree over the API and dry-runs the patch
+scripts, so it proves patches *apply*. It cannot prove the result *compiles*,
+and the majority of recent failures were compile errors:
+
+| failure | catchable statically? |
+|---|---|
+| `filter.h` implicit declarations after a BPF graft | no |
+| missing `linux/bpf_lirc.h` | no |
+| `atomic_fetch_add_unless` / `perf_event_bpf_event` | no |
+| `'/*' within block comment` in a generated shim | no |
+
+Chasing these with more static rules is a losing game. The answer is the
+**smoke gate** in the workflow: right after `olddefconfig` it builds only the
+subsystems our patches touch — `kernel/bpf/`, `kernel/sys.o`, `fs/pstore/`,
+`net/core/` — so a broken patch fails in ~4 minutes rather than ~17, and none
+of that work is thrown away because the full build needs those objects anyway.
+
+Rule of thumb: **preflight for facts about the tree, smoke gate for whether our
+patches survive a compiler.**
