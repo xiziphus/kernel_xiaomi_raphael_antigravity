@@ -21,6 +21,23 @@ echo "  donor $URL@$REF -> $(sed -n '2,4p' "$D/Makefile" | tr '\n' ' ')"
 echo "  local           -> $(sed -n '2,4p' Makefile | tr '\n' ' ')"
 
 # Whole-file replacements: the BPF core plus the headers that define its ABI.
+# SCOPED mode (BPF_GRAFT_SCOPE=sockopt): reproduce what Zundamon actually did
+# rather than transplanting a whole 5.4 BPF core.
+#
+# Rikka already has __cgroup_bpf_run_filter_sock_addr and the bind/connect
+# attach types, so the delta to KameOS is only two upstream features:
+#   * sendmsg/recvmsg attach types -- route through the EXISTING sock_addr hook
+#   * cgroup sockopt (5.3)         -- new prog type + get/setsockopt hooks
+# Far smaller surface than the 40-file graft, and it matches the historical path.
+if [ "${BPF_GRAFT_SCOPE:-full}" = "sockopt" ]; then
+  FILES="
+kernel/bpf/cgroup.c kernel/bpf/syscall.c kernel/bpf/verifier.c
+include/linux/bpf-cgroup.h include/linux/bpf.h include/linux/bpf_types.h
+include/uapi/linux/bpf.h
+net/socket.c net/ipv4/udp.c net/ipv6/udp.c net/ipv4/af_inet.c
+"
+  echo "  scope: sockopt+sendmsg only ($(echo $FILES | wc -w) files)"
+else
 FILES="
 kernel/bpf/btf.c kernel/bpf/cpumap.c kernel/bpf/disasm.c kernel/bpf/disasm.h
 kernel/bpf/local_storage.c kernel/bpf/offload.c kernel/bpf/queue_stack_maps.c
@@ -35,6 +52,7 @@ include/linux/btf.h include/linux/filter.h include/linux/bpf-cgroup.h
 include/uapi/linux/bpf.h include/uapi/linux/btf.h include/uapi/linux/bpf_common.h
 net/core/filter.c net/core/sock_map.c net/core/bpf_sk_storage.c
 "
+fi
 # Copy every bpf/btf header the donor has, rather than guessing a list: the
 # enumerated version missed linux/bpf_lirc.h and cost a build. Globs first,
 # explicit list second.
