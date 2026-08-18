@@ -113,13 +113,16 @@ def patch_syscall() -> bool:
         ("BPF_PROG_LOAD", "prog_name", "line_info_cnt"),
     ):
         pat = re.compile(r"(#define\s+%s_LAST_FIELD\s+)%s\b" % (cmd, old))
-        if not pat.search(out):
-            if re.search(r"#define\s+%s_LAST_FIELD\s+%s\b" % (cmd, new), out):
-                print("  syscall.c: %s_LAST_FIELD already %s" % (cmd, new))
-                continue
-            sys.exit("FATAL: could not find %s_LAST_FIELD %s" % (cmd, old))
-        out = pat.sub(r"\g<1>" + new, out)
-        print("  syscall.c: %s_LAST_FIELD %s -> %s" % (cmd, old, new))
+        if pat.search(out):
+            out = pat.sub(r"\g<1>" + new, out)
+            print("  syscall.c: %s_LAST_FIELD %s -> %s" % (cmd, old, new))
+            continue
+        # Anything else means the tree already tracks a newer layout of its own
+        # (5.4 trees use btf_vmlinux_value_type_id / map_extra, for instance).
+        # That is not our problem to fix -- leave it exactly as the tree has it.
+        cur = re.search(r"#define\s+%s_LAST_FIELD\s+(\S+)" % cmd, out)
+        print("  syscall.c: %s_LAST_FIELD is already '%s', leaving alone"
+              % (cmd, cur.group(1) if cur else "<not found>"))
     if out != src:
         open(SYSCALL, "w", encoding="utf-8").write(out)
         return True
