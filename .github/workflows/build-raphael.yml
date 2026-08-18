@@ -255,6 +255,16 @@ jobs:
           # min_kver-gated 4.17-5.10 cgroup hooks all check out).
           python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_map_types.py"
 
+          # Let a modern netbpfload talk to this kernel's bpf() syscall at all.
+          # bool-x has a PARTIAL Android bpf_attr backport (map_name/prog_name/
+          # file_flags but no btf_fd/expected_attach_type/...), while
+          # kernel/bpf/syscall.c still says BPF_MAP_CREATE_LAST_FIELD=map_name.
+          # CHECK_ATTR() memchr_inv()s everything after LAST_FIELD up to
+          # sizeof(union bpf_attr) and returns EINVAL on any nonzero byte, so a
+          # loader that writes BTF metadata fails EVERY map creation regardless
+          # of map type -- which is why fixing DEVMAP_HASH changed nothing.
+          python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_attr.py"
+
           # Reproduce KameOS's pstore geometry so a failed boot leaves a log we
           # can actually read. The ROM does NOT take ramoops from the DT -- its
           # cmdline carries `ramoops_memreserve=4M`, which a Xiaomi patch in
