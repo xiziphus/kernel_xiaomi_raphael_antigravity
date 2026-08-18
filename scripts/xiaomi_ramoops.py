@@ -259,8 +259,24 @@ def insert_dts_node(base="0xB0000000") -> int:
             m = re.search(r"reserved[_-]memory\s*:\s*reserved-memory\s*\{", txt)
             if not m:
                 continue
-            at = txt.index("\n", m.end())
-            open(fp, "w", encoding="utf-8").write(txt[:at] + node + txt[at:])
+            # Insert at the END of the reserved-memory block, not the start.
+            # DTS requires "properties must precede subnodes", and putting our
+            # subnode first pushed #address-cells/#size-cells/ranges after it:
+            #   Error: sm8150.dtsi:606.3-24 Properties must precede subnodes
+            depth, i = 1, m.end()
+            while i < len(txt) and depth:
+                if txt[i] == "{":
+                    depth += 1
+                elif txt[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            if depth:
+                print("  dts: unbalanced braces in %s, skipping" % fp)
+                continue
+            at = txt.rfind("\n", 0, i) + 1
+            open(fp, "w", encoding="utf-8").write(txt[:at] + node.lstrip("\n") + txt[at:])
             print("  dts: INSERTED ramoops@%s into reserved-memory in %s" % (base[2:], fp))
             return 1
     print("  dts: no reserved-memory node to insert into")
