@@ -62,6 +62,11 @@ on:
         required: false
         type: string
         default: 'true'
+      rdonly_prog_flag:
+        description: 'true = accept BPF_F_RDONLY_PROG/WRONLY_PROG on 4.14 maps (scripts/accept_rdonly_prog_flag.py). X3 showed tether_dev_map matching on type/key/value/entries and failing only on flags:128/0.'
+        required: false
+        type: string
+        default: 'false'
       fake_uname:
         description: 'Kernel release reported to bpfloader/netbpfload/netd only (scripts/fake_uname_bpfloader.py). netbpfload hard-refuses <4.19 -- "Android V requires kernel 4.19." -- which is the actual cause of reboot,bpfloader-failed. Empty = do not patch. Claiming a version also makes the loader attempt that version''s programs.'
         required: false
@@ -296,6 +301,10 @@ jobs:
           if [ -n "${{ inputs.bpf_donor }}" ]; then
             DONOR="${{ inputs.bpf_donor }}"
             bash "$GITHUB_WORKSPACE/scripts/transplant_bpf.sh" "${DONOR%@*}" "${DONOR##*@}"
+          fi
+
+          if [ "${{ inputs.rdonly_prog_flag }}" = "true" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/accept_rdonly_prog_flag.py"
           fi
 
           if [ -n "${{ inputs.fake_uname }}" ]; then
