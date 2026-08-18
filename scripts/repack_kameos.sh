@@ -32,6 +32,23 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 python3 "$REPO/scripts/unpack_boot.py" "$STOCK" "$WORK" >/dev/null
+
+# Prefer a Magisk-patched ramdisk when one has been captured. The stock
+# KameOS ramdisk gives a test kernel no root, and every interesting thing to
+# do with a kernel that finally boots -- reading pstore, starting dockerd,
+# mounting cgroups -- needs `su`. Capture it once with:
+#   adb shell su -c 'dd if=/dev/block/by-name/boot of=/data/local/tmp/b.img'
+#   adb pull /data/local/tmp/b.img && python3 scripts/unpack_boot.py b.img o/
+#   cp o/ramdisk.cpio.gz builds/ramdisk-magisk.cpio.gz
+# Header fields are identical between the two (os_version 13.0.0,
+# patch 2022-11, pagesize 4096), so only the ramdisk changes.
+RAMDISK="$WORK/ramdisk.cpio.gz"
+if [ -f "$REPO/builds/ramdisk-magisk.cpio.gz" ]; then
+  RAMDISK="$REPO/builds/ramdisk-magisk.cpio.gz"
+  echo "  ramdisk      : Magisk-patched (root available on the test kernel)"
+else
+  echo "  ramdisk      : stock (NO ROOT on the test kernel)"
+fi
 CMDLINE="$(python3 - "$WORK/boot_params.txt" <<'PY'
 import re,sys
 print(re.search(r'Cmdline:\s*(.*)', open(sys.argv[1]).read()).group(1).strip())
@@ -47,7 +64,7 @@ CMDLINE="$CMDLINE ramoops_memreserve=4M loglevel=8 ignore_loglevel printk.devkms
 mkdir -p "$(dirname "$OUT")"
 python3 "$REPO/mkbootimg_src/mkbootimg.py" \
   --kernel "$IMAGE" \
-  --ramdisk "$WORK/ramdisk.cpio.gz" \
+  --ramdisk "$RAMDISK" \
   --cmdline "$CMDLINE" \
   --header_version 0 \
   --os_version 13.0.0 --os_patch_level 2022-11 \

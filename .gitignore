@@ -120,3 +120,19 @@ infinityx/boot_extracted/
 # preserving our customised anykernel.sh. Track only that file.
 AnyKernel3/*
 !AnyKernel3/anykernel.sh
+
+# Qubo app DB - contains live MQTT credentials and device security keys
+qubo/
+
+# --- exFAT / VS Code performance -------------------------------------------
+# This volume is a userspace filesystem (fskitd + UVFSService), so every stat()
+# is an XPC round-trip. VS Code runs `git add -A` here on a timer; these two
+# entries are 98% of the 36,824 files git would otherwise walk.
+node_modules/
+
+# macOS side-cars xattrs into ._* files because exFAT has none. 19,300 of them.
+# The ones under .git/objects/pack/ are also what produce the recurring
+# "non-monotonic index ._pack-*.idx" errors — git tries to read them as packs.
+._*
+.DS_Store
+builds/ramdisk-magisk.cpio.gz
