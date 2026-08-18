@@ -171,10 +171,59 @@ def rewrite_dts_nodes(base="0xB0000000") -> int:
     return n
 
 
+
+def force_warm_reboot() -> int:
+    """Make the PMIC do a WARM reset, so DRAM (and thus ramoops) survives.
+
+    Proven on device 2026-08-18: after a CLEAN reboot /sys/fs/pstore is empty
+    even for KameOS's own kernel -- write a marker to /dev/kmsg, `adb reboot`,
+    and nothing comes back. Only a panic preserves the buffer. That is exactly
+    why waffleowo (Kernel panic) left 40 KB of console and bool-x (init reboots
+    cleanly on bpfloader failure) left nothing at all, and why chasing the
+    ramoops geometry could never have fixed it.
+
+    A hard PMIC reset re-initialises DDR and wipes the region. msm-poweroff.c
+    already supports the fix -- msm_restart_prepare() selects
+    PON_POWER_OFF_WARM_RESET when force_warm_reboot is set, and that flag is
+    read straight from a DT property -- so no C change is needed:
+
+        force_warm_reboot = of_property_read_bool(dev->of_node,
+                                                  "qcom,force-warm-reboot");
+
+    Helium's 5.4 tree carries the same idea as a commit: "power: msm: Always
+    perform warm reboot".
+    """
+    n = 0
+    for root, _dirs, files in os.walk("arch/arm64/boot/dts/qcom"):
+        for name in files:
+            if not name.endswith((".dts", ".dtsi")):
+                continue
+            fp = os.path.join(root, name)
+            try:
+                txt = open(fp, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if 'compatible = "qcom,pshold"' not in txt:
+                continue
+            if "qcom,force-warm-reboot" in txt:
+                print("  warm-reboot: already set in %s" % fp)
+                continue
+            txt = txt.replace('compatible = "qcom,pshold";',
+                              'compatible = "qcom,pshold";' + chr(10) +
+                              chr(9) + chr(9) + "qcom,force-warm-reboot;", 1)
+            open(fp, "w", encoding="utf-8").write(txt)
+            print("  warm-reboot: qcom,force-warm-reboot added in %s" % fp)
+            n += 1
+    if not n:
+        print("  warm-reboot: no qcom,pshold node found")
+    return n
+
+
 if __name__ == "__main__":
     # Prefer the DT node -- it is the channel we have actually seen work.
     # Only fall back to the vendor cmdline mechanism when the tree has no node
     # to fix, so we never end up with two competing ramoops devices.
+    force_warm_reboot()
     n = rewrite_dts_nodes()
     if n:
         print("  xiaomi ramoops: %d DT node(s) set to the ROM geometry" % n)
