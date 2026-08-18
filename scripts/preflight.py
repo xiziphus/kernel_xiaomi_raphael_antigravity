@@ -186,9 +186,17 @@ if "--dry-run" in FLAGS:
             continue
         os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
         open(os.path.join(d, rel), "w", encoding="utf-8").write(t)
-    for script, env in (("backport_bpf_map_types.py", {}), ("backport_bpf_attr.py", {}),
-                        ("fake_uname_bpfloader.py", {"FAKE_UNAME_RELEASE": "5.4.186"}),
-                        ("xiaomi_ramoops.py", {})):
+    # Auto-discover every patch script rather than keeping a hand-maintained
+    # list: the list went stale the moment accept_rdonly_prog_flag.py was added,
+    # and that script then aborted a build with "no BPF_F_* anchor found".
+    PATCHES = sorted(f for f in os.listdir(HERE)
+                     if f.endswith(".py") and not f.startswith("._")   # exFAT AppleDouble noise
+                     and f not in ("preflight.py",)
+                     and any(k in f for k in ("backport_", "fake_uname", "ramoops",
+                                              "accept_", "fix_")))
+    print("dryrun : %d patch scripts discovered" % len(PATCHES))
+    for script in PATCHES:
+        env = {"FAKE_UNAME_RELEASE": "5.4.186"}
         e = dict(os.environ); e.update(env)
         r = subprocess.run(["python3", os.path.join(HERE, script)], cwd=d,
                            capture_output=True, text=True, env=e)
