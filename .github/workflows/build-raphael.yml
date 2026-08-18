@@ -87,6 +87,11 @@ on:
         required: false
         type: string
         default: 'false'
+      trace_printk_dummy:
+        description: 'true = make bpf_get_trace_printk_proto() return a no-op helper instead of NULL (scripts/add_trace_printk_dummy.py), the way KameOS''s own kernel does. Xiaomi''s non-optional osrtpPolicy.o XDP program calls helper 6, and without BPF_EVENTS the verifier rejects it.'
+        required: false
+        type: string
+        default: 'false'
       bpf_graft_scope:
         description: '"sockopt" = graft ONLY the sendmsg/recvmsg + cgroup-sockopt files (what Zundamon actually added to Rikka). "full" = the whole BPF subsystem.'
         required: false
@@ -338,6 +343,10 @@ jobs:
 
           if [ "${{ inputs.xskmap_alias }}" = "true" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/alias_xskmap.py"
+          fi
+
+          if [ "${{ inputs.trace_printk_dummy }}" = "true" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/add_trace_printk_dummy.py"
           fi
 
           if [ -n "${{ inputs.fake_uname }}" ]; then
