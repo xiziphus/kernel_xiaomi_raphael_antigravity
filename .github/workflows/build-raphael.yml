@@ -62,6 +62,16 @@ on:
         required: false
         type: string
         default: 'true'
+      bpf_donor:
+        description: 'Optional "<git-url>@<ref>" whose BPF subsystem is grafted over this tree (scripts/transplant_bpf.sh). Use to bring openela BPF to bool-x -- the direction that matches what KameOS actually is.'
+        required: false
+        type: string
+        default: ''
+      append_dtb:
+        description: 'Optional base dtb name (e.g. sm8150-v2.dtb) to concatenate onto Image.gz when the tree has no Image.gz-dtb target (5.4 GKI-style trees).'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -263,6 +273,11 @@ jobs:
           # already has types up to 25. See the script header for why nothing
           # else was missing (program types, helpers, instruction set and the
           # min_kver-gated 4.17-5.10 cgroup hooks all check out).
+          if [ -n "${{ inputs.bpf_donor }}" ]; then
+            DONOR="${{ inputs.bpf_donor }}"
+            bash "$GITHUB_WORKSPACE/scripts/transplant_bpf.sh" "${DONOR%@*}" "${DONOR##*@}"
+          fi
+
           if [ "${{ inputs.bpf_devmap_hash }}" != "false" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_map_types.py"
           else echo "  (DEVMAP_HASH backport SKIPPED by input)"; fi
@@ -412,7 +427,18 @@ jobs:
           echo "pre-build config OK (authoritative check runs on the built image)"
 
           echo "=== build ==="
-          make -j"$(nproc)" "${MK[@]}" Image.gz-dtb
+          if ! make -j"$(nproc)" "${MK[@]}" Image.gz-dtb; then
+            # 5.4/GKI-style trees have no appended-DTB target. raphael's
+            # bootloader still wants Image.gz with a base dtb concatenated;
+            # device overlays come from the dtbo partition.
+            APP="${{ inputs.append_dtb }}"
+            [ -n "$APP" ] || { echo "Image.gz-dtb failed and no append_dtb given"; exit 1; }
+            make -j"$(nproc)" "${MK[@]}" Image.gz dtbs
+            BASE=$(find out/arch/arm64/boot/dts -name "$APP" | head -1)
+            [ -n "$BASE" ] || { echo "append_dtb '$APP' not built"; find out/arch/arm64/boot/dts -name '*.dtb' | head; exit 1; }
+            cat out/arch/arm64/boot/Image.gz "$BASE" > out/arch/arm64/boot/Image.gz-dtb
+            echo "appended $BASE -> Image.gz-dtb"
+          fi
 
           IMG=out/arch/arm64/boot/Image.gz-dtb
           [ -f "$IMG" ] || { echo "ERROR: $IMG not produced"; exit 1; }
