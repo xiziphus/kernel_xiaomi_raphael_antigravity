@@ -398,6 +398,16 @@ jobs:
           CONFIG_LITTLE_CPU_MASK=15
           CONFIG_BIG_CPU_MASK=112
           CONFIG_PRIME_CPU_MASK=128
+          # --- PSTORE: without this a failed boot is SILENT ---
+          # Rikka's raphael_defconfig ships no PSTORE symbols at all, so two
+          # Rikka test boots wrote nothing to ramoops and looked like a DT bug
+          # in xiaomi_ramoops.py. It was not: the ram backend was never
+          # compiled in. bool-x and oss-base both enable these in-tree, which
+          # is why only Rikka went dark. Force them for every tree.
+          CONFIG_PSTORE=y
+          CONFIG_PSTORE_CONSOLE=y
+          CONFIG_PSTORE_PMSG=y
+          CONFIG_PSTORE_RAM=y
           # --- BPF_EVENTS: required or Android will not boot on this kernel ---
           # bpfloader is a `critical` init service. When it fails, init reboots
           # and records `reboot,bpfloader-failed` in
@@ -465,7 +475,8 @@ jobs:
             echo "build is a boot control and is EXPECTED to lack them."
           else
             for o in NAMESPACES PID_NS NET_NS CGROUP_PIDS CGROUP_DEVICE POSIX_MQUEUE \
-                     OVERLAY_FS VETH BRIDGE NETFILTER_XT_MATCH_ADDRTYPE NF_NAT; do
+                     OVERLAY_FS VETH BRIDGE NETFILTER_XT_MATCH_ADDRTYPE NF_NAT \
+                     PSTORE_RAM PSTORE_CONSOLE; do
               grep -q "^CONFIG_${o}=y" out/.config || { echo "FATAL: CONFIG_${o} lost at config time"; fail=1; }
             done
           fi
