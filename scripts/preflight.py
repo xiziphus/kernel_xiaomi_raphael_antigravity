@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Check a kernel tree for the known build-breakers BEFORE burning a 20-min runner.
+
+Usage:  scripts/preflight.py <owner/repo> <ref> [defconfig]
+
+Every check here exists because it actually broke a build in this project. Runs
+in seconds against the GitHub API -- no clone. Exit code is non-zero if any
+BLOCKER is found; WARNs are advisory.
+"""
+import json
+import subprocess
+import sys
+
+REPO, REF = sys.argv[1], sys.argv[2]
+DEFCONFIG = sys.argv[3] if len(sys.argv) > 3 else "raphael_defconfig"
+blockers, warns, notes = [], [], []
+
+
+def gh(path):
+    r = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+    return None if r.returncode else r.stdout
+
+
+def text(path):
+    import base64
+    out = gh("repos/%s/contents/%s?ref=%s" % (REPO, path, REF))
+    if not out:
+        return None
+    try:
+        return base64.b64decode(json.loads(out)["content"]).decode("utf-8", "replace")
+    except Exception:
+        return None
+
+
+def listdir(path):
+    out = gh("repos/%s/contents/%s?ref=%s" % (REPO, path, REF))
+    if not out:
+        return []
+    try:
+        return [e["name"] for e in json.loads(out)]
+    except Exception:
+        return []
+
+
+print("=== preflight %s@%s (defconfig=%s)" % (REPO, REF, DEFCONFIG))
+
+# 0. tree exists / version
+mk = text("Makefile")
+if not mk:
+    print("BLOCKER: cannot read Makefile -- wrong repo or ref?")
+    sys.exit(1)
+ver = " ".join(l.strip() for l in mk.splitlines()[1:4])
+notes.append("version: %s" % ver)
+
+# 1. defconfig present (a missing one fails only after clang is fetched)
+cfgs = listdir("arch/arm64/configs")
+if DEFCONFIG not in cfgs:
+    vend = listdir("arch/arm64/configs/vendor")
+    if DEFCONFIG in vend:
+        notes.append("defconfig lives under vendor/ -- pass 'vendor/%s'" % DEFCONFIG)
+    else:
+        blockers.append("defconfig '%s' not in arch/arm64/configs (have: %s)"
+                        % (DEFCONFIG, " ".join(sorted(cfgs)[:8])))
+
+# 2. appended-DTB target: 5.4/GKI trees have none, so Image.gz-dtb does not exist
+akc = text("arch/arm64/Kconfig") or ""
+if "BUILD_ARM64_APPENDED_DTB_IMAGE" not in akc:
+    blockers.append("no BUILD_ARM64_APPENDED_DTB_IMAGE in arch/arm64/Kconfig -- "
+                    "'make Image.gz-dtb' will fail; pass append_dtb=<base>.dtb")
+
+# 3. Makefile references to source files that were deleted from the tree
+amk = text("arch/arm64/kernel/Makefile") or ""
+srcs = set(listdir("arch/arm64/kernel"))
+for obj in ("perf_trace_counters", "perf_trace_user"):
+    if obj + ".o" in amk and obj + ".c" not in srcs:
+        warns.append("arch/arm64/kernel/Makefile wants %s.o but %s.c is absent "
+                     "(CI strips this automatically)" % (obj, obj))
+
+# 4. the two BPF patch scripts must be able to no-op safely
+sysc = text("kernel/bpf/syscall.c") or ""
+import re
+for cmd in ("BPF_MAP_CREATE", "BPF_PROG_LOAD"):
+    m = re.search(r"#define\s+%s_LAST_FIELD\s+(\S+)" % cmd, sysc)
+    notes.append("%s_LAST_FIELD = %s" % (cmd, m.group(1) if m else "NOT FOUND"))
+    if not m:
+        warns.append("%s_LAST_FIELD not found -- bpf_attr patch will skip" % cmd)
+
+uapi = text("include/uapi/linux/bpf.h") or ""
+m = re.search(r"enum bpf_map_type \{(.*?)\n\};", uapi, re.S)
+if m:
+    last = re.findall(r"\bBPF_MAP_TYPE_[A-Z0-9_]+", m.group(1))[-1]
+    notes.append("enum bpf_map_type ends at %s" % last)
+    if last != "BPF_MAP_TYPE_SOCKMAP" and "DEVMAP_HASH" not in uapi:
+        warns.append("map-type backport refuses trees whose enum ends at %s" % last)
+notes.append("has DEVMAP_HASH=%s  expected_attach_type=%s  btf.c=%s"
+             % ("DEVMAP_HASH" in uapi, "expected_attach_type" in uapi,
+                bool(gh("repos/%s/contents/kernel/bpf/btf.c?ref=%s" % (REPO, REF)))))
+
+# 5. pstore: the log channel. Needs a ramoops node AND a pshold node for warm reset.
+found_ramoops = found_pshold = False
+for f in listdir("arch/arm64/boot/dts/qcom"):
+    if not f.endswith((".dts", ".dtsi")):
+        continue
+    if f not in ("sm8150.dtsi",):
+        continue
+    t = text("arch/arm64/boot/dts/qcom/" + f) or ""
+    found_ramoops = found_ramoops or ("ramoops@" in t)
+    found_pshold = found_pshold or ('compatible = "qcom,pshold"' in t)
+if not found_ramoops:
+    warns.append("no ramoops@ node in sm8150.dtsi -- falls back to the cmdline mechanism")
+if not found_pshold:
+    warns.append("no qcom,pshold node in sm8150.dtsi -- cannot force warm reset, "
+                 "so a clean reboot will WIPE the log")
+
+# 6. Polly hangs the build (20+ min at 99% CPU on one file, never finishes)
+if "CONFIG_LLVM_POLLY" in (text("Makefile") or "") or "polly" in (mk or "").lower():
+    notes.append("tree references LLVM_POLLY -- ensure it is disabled")
+
+for b in blockers:
+    print("BLOCKER: " + b)
+for w in warns:
+    print("WARN   : " + w)
+for n in notes:
+    print("note   : " + n)
+print("=== %s" % ("BLOCKED" if blockers else "ok to build"))
+sys.exit(1 if blockers else 0)
