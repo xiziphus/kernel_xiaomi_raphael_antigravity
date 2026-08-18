@@ -12,8 +12,10 @@ import re
 import subprocess
 import sys
 
-REPO, REF = sys.argv[1], sys.argv[2]
-DEFCONFIG = sys.argv[3] if len(sys.argv) > 3 else "raphael_defconfig"
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+FLAGS = [a for a in sys.argv[1:] if a.startswith("--")]
+REPO, REF = ARGS[0], ARGS[1]
+DEFCONFIG = ARGS[2] if len(ARGS) > 2 else "raphael_defconfig"
 blockers, warns, notes = [], [], []
 
 
@@ -160,6 +162,44 @@ for probe in ("", "drivers", "drivers/staging"):
                                 "and cannot be inited" % where)
             else:
                 notes.append("gitlink: %s" % where)
+
+
+# 12. DRY-RUN every patch script against the real files. Three of the failures
+#     so far were our own tooling, not the trees, and an inline heredoc in the
+#     workflow could not be tested at all -- hence scripts/, and hence this.
+import subprocess, tempfile, shutil
+def dry_run():
+    need = ["kernel/sys.c", "kernel/bpf/syscall.c", "include/uapi/linux/bpf.h",
+            "include/linux/bpf_types.h", "fs/pstore/ram.c",
+            "arch/arm64/boot/dts/qcom/sm8150.dtsi"]
+    d = tempfile.mkdtemp()
+    got = []
+    for rel in need:
+        t = text(rel)
+        if t is None:
+            continue
+        os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
+        open(os.path.join(d, rel), "w", encoding="utf-8").write(t)
+        got.append(rel)
+    here = os.path.dirname(os.path.abspath(__file__))
+    for script, env in (("backport_bpf_map_types.py", {}),
+                        ("backport_bpf_attr.py", {}),
+                        ("fake_uname_bpfloader.py", {"FAKE_UNAME_RELEASE": "5.4.186"}),
+                        ("xiaomi_ramoops.py", {})):
+        e = dict(os.environ); e.update(env)
+        r = subprocess.run(["python3", os.path.join(here, script)],
+                           cwd=d, capture_output=True, text=True, env=e)
+        tag = "ok  " if r.returncode == 0 else "FAIL"
+        first = (r.stdout.strip().splitlines() or [""])[0]
+        err = (r.stderr.strip().splitlines() or [""])[-1]
+        print("dryrun : %s %-28s %s" % (tag, script, first or err))
+        if r.returncode != 0:
+            blockers.append("%s fails on this tree: %s" % (script, err))
+    shutil.rmtree(d, ignore_errors=True)
+
+import os
+if "--dry-run" in FLAGS:
+    dry_run()
 
 for b in blockers:
     print("BLOCKER: " + b)
