@@ -38,7 +38,7 @@ if [ "${BPF_GRAFT_SCOPE:-full}" = "devmap" ]; then
   echo "  scope: devmap only (real dev_map_hash_ops)"
 elif [ "${BPF_GRAFT_SCOPE:-full}" = "sockopt" ]; then
   FILES="
-kernel/bpf/cgroup.c kernel/bpf/syscall.c kernel/bpf/verifier.c
+kernel/bpf/cgroup.c kernel/bpf/syscall.c kernel/bpf/verifier.c kernel/bpf/core.c
 include/linux/bpf-cgroup.h include/linux/bpf.h include/linux/bpf_types.h
 include/uapi/linux/bpf.h
 net/socket.c net/ipv4/udp.c net/ipv6/udp.c net/ipv4/af_inet.c
@@ -204,6 +204,33 @@ static inline int bpf_probe_unregister(struct bpf_raw_event_map *btp,
 
 #endif /* _BPF_TRANSPLANT_COMPAT_H */
 SHIM
+
+# Drop shims the base tree already provides. See the vmalloc.h note above.
+python3 - <<'PYPRUNE'
+import re, os
+p = "include/linux/bpf_transplant_compat.h"
+s = open(p, encoding="utf-8", errors="replace").read()
+hdrs = []
+for root, _, files in os.walk("include"):
+    for f in files:
+        if f.endswith(".h") and f != "bpf_transplant_compat.h":
+            hdrs.append(os.path.join(root, f))
+blob = ""
+for h in hdrs:
+    try: blob += open(h, encoding="utf-8", errors="replace").read()
+    except OSError: pass
+dropped = []
+def prune(m):
+    name = m.group(1)
+    # a real declaration or definition of the symbol elsewhere in include/
+    if re.search(r"\b%s\s*\(" % re.escape(name), blob):
+        dropped.append(name); return ""
+    return m.group(0)
+s = re.sub(r"#ifndef (\w+)\n(?:(?!#ifndef|#endif).)*?#endif\n",
+           prune, s, flags=re.S)
+open(p, "w", encoding="utf-8").write(s)
+print("    shims pruned (tree already has them): %s" % (", ".join(dropped) or "none"))
+PYPRUNE
 
 # Pull the shims in from filter.h, after its own includes.
 python3 - <<'PYINJ'
