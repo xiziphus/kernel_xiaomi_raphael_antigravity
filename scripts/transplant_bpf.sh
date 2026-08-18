@@ -193,7 +193,8 @@ static inline int skb_flow_dissector_prog_query(const union bpf_attr *attr,
  */
 #ifndef BPF_TRANSPLANT_HAVE_RAW_TP
 struct bpf_raw_event_map;
-static inline bool bpf_dump_raw_ok(void) { return false; }
+/* variadic: 4.14 callers pass nothing, 5.4's syscall.c passes file->f_cred */
+#define bpf_dump_raw_ok(...) (false)
 static inline int bpf_probe_register(struct bpf_raw_event_map *btp,
 				     struct bpf_prog *prog)
 { return -EOPNOTSUPP; }
