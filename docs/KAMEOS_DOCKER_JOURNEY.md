@@ -99,7 +99,10 @@ Also useful: it reboots **cleanly in ~27 s**, so iterating no longer needs a
 physical power press (a failed `fastboot boot` on raphael otherwise powers the
 device *off*).
 
-## 5. Reading the ROM's own BPF objects — the method that actually worked
+## 5. Reading the ROM's own BPF objects — how to replace guesses with facts
+
+This technique produces evidence, not a booting kernel. It has ruled several
+theories out and found one real defect; Docker still does not run on KameOS.
 
 The real loader is `/apex/com.android.tethering/bin/netbpfload`; its rc file
 documents this exact bootloop and says the cause is usually *"the kernel's bpf
@@ -297,3 +300,120 @@ All in [.github/workflows/build-raphael.yml](../.github/workflows/build-raphael.
   `lpm-levels.c`/`lpm-levels-legacy.c` look like the same bug but are an
   `ifeq/else`, so "fixing" them yields `undefined symbol: __tracepoint_cluster_enter`
 - inputs `stock_only` (control build) and `enable_tracing` (default off)
+
+## 14. Reading the working kernel as a spec, and the pstore unlock (2026-08-18)
+
+With root on the *running* ROM, KameOS's own kernel becomes the reference
+implementation. Everything below came from the device, not from reasoning.
+
+### 14.1 What `4.14.356-Zundamon-v3.0` actually contains
+
+`adb shell su -c 'cat /proc/kallsyms'` — it carries a large ~5.4-era BPF
+backport on a 4.14 base: full `btf.c` (70 `btf_*` symbols, `btf_new_fd`,
+`btf_get_by_fd`), the genuine `dev_map_hash_update_elem`, `bpf_map_charge_init`
+/ `bpf_map_init_from_attr`, `bpf_sk_storage_get`, and the `sock_addr` +
+`get/setsockopt` cgroup hooks. It does **not** have ringbuf, sockmap/sockhash,
+map batch ops, iterators, LSM, or `bpf_raw_tracepoint_open`.
+
+Note the shape of that list: our `scripts/backport_bpf_map_types.py` aliases
+DEVMAP_HASH onto the index-based `dev_map_ops`, whereas the ROM's kernel has the
+real hash implementation *and* the charge/init infrastructure that patch's
+docstring says 4.14 lacks.
+
+### 14.2 BTF is not the blocker
+
+`/sys/kernel/btf/` does not exist on KameOS — that sysfs node is 5.5+ — yet the
+ROM boots. So netbpfload does not require it. (The BTF *code* is present and
+`BPF_BTF_LOAD` does work there; the loader also has an explicit retry and a
+`failed program %s is marked optional - continuing...` path.)
+
+### 14.3 The `min_kver` decode, verified
+
+Earlier analysis was doubted. It is correct, and the proof is a boundary pair
+inside `offload.o`: `..._rawip$stub` has max_kver `0x040E0000` while
+`..._rawip$4_14` has min_kver `0x040E0000`. That pins the layout unambiguously —
+in a 92-byte `bpf_prog_def`, u32[2] is min_kver and u32[3] is max_kver.
+
+Decoding `netd.o` with it:
+
+| program | min_kver | on 4.14 |
+|---|---|---|
+| `bpf_cgroup_{ingress,egress}_4_9` | 0 (max 4.19) | **required** |
+| `inet_socket_create` | 4.14 | **required** |
+| `xt_bpf_*`, `tc_bpf_ingress_account` | 0 | **required** |
+| `inet{4,6}_{bind,connect}`, `udp{4,6}_{send,recv}msg` | 4.19 | skipped |
+| `getsockopt`/`setsockopt` | 5.4 | skipped |
+
+So the "missing 4.17–5.10 cgroup hooks" theory is dead for good. Zundamon
+backported those hooks, but nothing on this ROM asks a 4.14 kernel for them.
+
+### 14.4 The MIUI BPF set exists — and is not the cause
+
+HyperOS ships a second loader, `/system_ext/bin/hyper_bpfloader`
+(`/system_ext/etc/init/hyper_bpfloader.rc`), plus `/system/etc/bpf/miui/*`,
+`memevents`, `gpuWork`, `MiuiMmTrace`. These are HyperOS-only and invisible to
+any AOSP-based analysis, so they looked like a promising suspect.
+
+They are not. Every one of them needs tracepoints, kprobes, or ringbuf
+(`BPF_MAP_TYPE_RINGBUF`, type 27) — and KameOS's own kernel has **no**
+`trace_call_bpf`, no `register_kprobe`, and no `bpf_ringbuf_reserve`. They
+cannot be loading on the working kernel either, and the device boots fine.
+That also settles a general point: **non-critical load failures are tolerated.**
+
+Two distinct reboot reasons, worth not confusing:
+`hyper_bpfloader` → `reboot,hyper-bpfloader-failed`; the apex
+`/apex/com.android.tethering/etc/netbpfload.rc` → `reboot,bpfloader-failed`,
+which is ours. Critical objects are exactly four: `netd.o`, `offload.o`,
+`clatd.o`, `dscpPolicy.o`.
+
+### 14.5 Helpers all check out
+
+Disassembling every 4.14-eligible program in those four objects for `BPF_CALL`
+(opcode `0x85`, src_reg 0) yields 16 distinct helper ids. All 16 are present in
+bool-x — whose `__BPF_FUNC_MAPPER` list is in fact byte-identical to the modern
+one (126 entries, same tail). Helpers, program types, attach types and map types
+are now all accounted for.
+
+### 14.6 Why every failed boot was silent — and the fix
+
+The ROM's cmdline contains **`ramoops_memreserve=4M`**. KameOS does not take
+pstore from the device tree at all: a Xiaomi patch in `fs/pstore/ram.c` parses
+that early param, hardcodes `0xB0000000`, splits the size half to console and
+half to pmsg, and registers a bare platform device. Hence no
+`/proc/device-tree` node, and hence every region we declared in DTS was in the
+wrong place.
+
+Worse, the trigger is **not in the boot header** — the stock boot image's
+cmdline has no such param. The ROM's kernel supplies it from its own built-in
+`CONFIG_CMDLINE`. So our images never even armed the mechanism.
+
+Both halves are now fixed: `scripts/xiaomi_ramoops.py` installs the vendor
+mechanism (and deletes any DT ramoops node, which would otherwise reserve a
+second region and win the platform-device race), and
+`scripts/repack_kameos.sh` puts `ramoops_memreserve=4M` on the cmdline.
+
+Geometry has to match byte for byte — pstore lays the region out as
+records → console → ftrace → pmsg, so a single differing size shifts every
+later buffer. Verified against the live device
+(`/sys/module/ramoops/parameters/*`): `mem_address=0xB0000000`,
+`mem_size=0x400000`, `console_size=0x200000`, `pmsg_size=0x200000`,
+`record_size=0`, `ftrace_size=0`, `ecc=0`, `dump_oops=1`.
+
+After a failed test boot, back in KameOS:
+
+```sh
+adb shell su -c 'logcat -L -b all' | grep -iE 'bpf|netbpf'      # pmsg  (bpfloader's own error)
+adb shell su -c 'dumpsys dropbox --print SYSTEM_LAST_KMSG'      # console (kernel)
+```
+
+### 14.7 Better base trees than bool-x
+
+Found by search; all carry DEVMAP_HASH, the full cgroup attach types and
+`btf.c`, so they need no hand-porting:
+
+| tree / branch | ver | note |
+|---|---|---|
+| `qaz6750/android_kernel_xiaomi_sm8150@a16-hyper-xiaomi-4.14.y` | 4.14.356 | HyperOS lineage, KameOS's exact sublevel, full BPF — but **no** raphael dts/defconfig (its `a14-xiaomi-4.14.y` branch has those and no BPF). Likely the base Zundamon combined. |
+| `hxsyzl/kernel_xiaomi_raphael@{16.0-raphael,dynamic}` | 4.14.357 | has `raphael_defconfig`, biggest `btf.c`, and **implements `ramoops_memreserve`** — the source of the pstore patch above |
+| `waffleowo/kernel_xiaomi_raphael_bpf@bpf-5.4-backport` | 4.14.353 | explicit BPF-5.4-backport onto raphael, incl. "fake uname to 5.4.186" |
+| `HeliumStudio-Dev/kernel_xiaomi_raphael_5.4@zundamon-miui-5.4` | 5.4.302 | MIUI lineage on 5.4, where every netbpfload requirement is native |
