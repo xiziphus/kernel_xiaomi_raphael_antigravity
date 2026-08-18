@@ -82,6 +82,11 @@ on:
         required: false
         type: string
         default: 'false'
+      xskmap_alias:
+        description: 'true = register BPF_MAP_TYPE_XSKMAP (17) against dev_map_ops and let bpf_redirect_map take it (scripts/alias_xskmap.py). Xiaomi''s osrtpPolicy.o creates mi_xsk_port_map unconditionally; without this the whole netd_shared directory fails even though netd.o loaded.'
+        required: false
+        type: string
+        default: 'false'
       bpf_graft_scope:
         description: '"sockopt" = graft ONLY the sendmsg/recvmsg + cgroup-sockopt files (what Zundamon actually added to Rikka). "full" = the whole BPF subsystem.'
         required: false
@@ -329,6 +334,10 @@ jobs:
 
           if [ "${{ inputs.cgroup_sockopt }}" = "true" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/add_cgroup_sockopt.py"
+          fi
+
+          if [ "${{ inputs.xskmap_alias }}" = "true" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/alias_xskmap.py"
           fi
 
           if [ -n "${{ inputs.fake_uname }}" ]; then
