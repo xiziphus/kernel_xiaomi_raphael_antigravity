@@ -246,6 +246,11 @@ def insert_dts_node(base="0xB0000000") -> int:
         for name in files:
             if not name.endswith(".dtsi"):
                 continue
+            # Same filter as rewrite_dts_nodes. Without it this inserted the
+            # node into sa8195-vm-lv.dtsi -- a different SoC -- and reported
+            # success, exactly as the earlier version "fixed" apq8016-sbc.dtsi.
+            if not ("sm8150" in name or "raphael" in name):
+                continue
             fp = os.path.join(root, name)
             try:
                 txt = open(fp, encoding="utf-8", errors="replace").read()
@@ -276,3 +281,17 @@ if __name__ == "__main__":
         if not insert_dts_node():
             print("  no reserved-memory to extend; falling back to the cmdline path")
             patch_ram_c()
+
+    # Post-condition. Twice now this script has patched a device tree belonging
+    # to a completely different board and reported success, costing a device
+    # cycle each time. Verify the file raphael actually builds ended up with the
+    # node, and say so loudly if not.
+    ok = False
+    for cand in ("arch/arm64/boot/dts/qcom/sm8150.dtsi",):
+        if os.path.exists(cand) and "ramoops@b0000000" in open(cand, encoding="utf-8", errors="replace").read().lower():
+            ok = True
+    if ok:
+        print("  VERIFIED: sm8150.dtsi carries ramoops@b0000000")
+    else:
+        print("  WARNING: sm8150.dtsi has NO ramoops@b0000000 -- a failed boot "
+              "will leave no log. Do not spend a device cycle on this image.")
