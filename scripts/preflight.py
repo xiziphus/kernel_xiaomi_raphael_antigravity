@@ -126,6 +126,41 @@ if not found_pshold:
 if "CONFIG_LLVM_POLLY" in (text("Makefile") or "") or "polly" in (mk or "").lower():
     notes.append("tree references LLVM_POLLY -- ensure it is disabled")
 
+
+# 11. Submodules / gitlinks. A --depth=1 clone leaves these EMPTY, and a Kconfig
+#     `source` or Makefile obj-y pointing into one then kills the build --
+#     e.g. Rikka: can't open file "drivers/staging/kernelsu/kernel/Kconfig".
+#     This project has hit the same class before (mkbootimg_src is a gitlink
+#     with no .gitmodules, so it clones empty), which is why it is checked here
+#     rather than waiting to be surprised by it again.
+gm = text(".gitmodules")
+if gm:
+    paths = re.findall(r"path\s*=\s*(\S+)", gm)
+    notes.append(".gitmodules declares: %s" % (" ".join(paths) or "(none)"))
+    warns.append("%d submodule(s) -- CI inits them and drops dangling Kconfig "
+                 "source() lines; without that the build dies at defconfig"
+                 % len(paths))
+# gitlinks are entries of type "commit"; catch the ones with no .gitmodules too
+for probe in ("", "drivers", "drivers/staging"):
+    out = gh("repos/%s/contents/%s?ref=%s" % (REPO, probe, REF))
+    if not out:
+        continue
+    try:
+        entries = json.loads(out)
+    except Exception:
+        continue
+    if not isinstance(entries, list):
+        continue
+    for e in entries:
+        if e.get("type") == "submodule" or (e.get("type") == "file" and e.get("size") == 0
+                                            and e.get("submodule_git_url")):
+            where = probe + "/" + e["name"] if probe else e["name"]
+            if not gm:
+                blockers.append("gitlink '%s' with NO .gitmodules -- clones empty "
+                                "and cannot be inited" % where)
+            else:
+                notes.append("gitlink: %s" % where)
+
 for b in blockers:
     print("BLOCKER: " + b)
 for w in warns:
