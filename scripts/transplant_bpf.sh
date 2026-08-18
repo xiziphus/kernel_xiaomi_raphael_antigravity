@@ -34,7 +34,7 @@ if [ "${BPF_GRAFT_SCOPE:-full}" = "devmap" ]; then
   # onto 4.14's array-based dev_map_ops, and the loader rejects the result
   # (flags:128/0) even with the flag masks widened -- proven on device. KameOS
   # has the genuine dev_map_hash_ops, so take devmap.c wholesale.
-  FILES="kernel/bpf/devmap.c include/linux/bpf_types.h include/uapi/linux/bpf.h"
+  FILES="kernel/bpf/devmap.c"   # enum + registration are handled by backport_bpf_map_types.py
   echo "  scope: devmap only (real dev_map_hash_ops)"
 elif [ "${BPF_GRAFT_SCOPE:-full}" = "sockopt" ]; then
   FILES="
@@ -63,13 +63,22 @@ fi
 # Copy every bpf/btf header the donor has, rather than guessing a list: the
 # enumerated version missed linux/bpf_lirc.h and cost a build. Globs first,
 # explicit list second.
-for pat in "include/linux/bpf*.h" "include/uapi/linux/bpf*.h" \
-           "include/linux/btf*.h" "include/uapi/linux/btf*.h"; do
-  for f in $(cd "$D" && ls $pat 2>/dev/null); do
-    mkdir -p "$(dirname "$f")"; cp "$D/$f" "$f"
+# Header glob is FULL-SCOPE ONLY. It used to run unconditionally, which meant a
+# "scoped" graft still replaced include/linux/bpf.h with the donor's -- and then
+# the base tree's own un-grafted files broke on it ("no member named 'pages' in
+# struct bpf_map", because Rikka's bpf_map has u32 pages and the donor's does
+# not). A scope that overwrites the core header is not a scope.
+if [ "${BPF_GRAFT_SCOPE:-full}" = "full" ]; then
+  for pat in "include/linux/bpf*.h" "include/uapi/linux/bpf*.h" \
+             "include/linux/btf*.h" "include/uapi/linux/btf*.h"; do
+    for f in $(cd "$D" && ls $pat 2>/dev/null); do
+      mkdir -p "$(dirname "$f")"; cp "$D/$f" "$f"
+    done
   done
-done
-echo "  headers: globbed bpf*/btf* from donor"
+  echo "  headers: globbed bpf*/btf* from donor (full scope)"
+else
+  echo "  headers: NOT globbed -- scoped graft keeps the base tree's headers"
+fi
 
 n=0; miss=0
 for f in $FILES; do
