@@ -52,6 +52,16 @@ on:
         required: false
         type: string
         default: 'false'
+      bpf_attr_abi:
+        description: 'true = extend union bpf_attr to the modern layout so CHECK_ATTR accepts btf_fd/expected_attach_type (scripts/backport_bpf_attr.py). Isolate this to tell the ABI theory apart from the verifier theory.'
+        required: false
+        type: string
+        default: 'true'
+      bpf_devmap_hash:
+        description: 'true = make BPF_MAP_TYPE_DEVMAP_HASH creatable (scripts/backport_bpf_map_types.py). The one confirmed defect; keep on.'
+        required: false
+        type: string
+        default: 'true'
 
 jobs:
   build:
@@ -253,7 +263,9 @@ jobs:
           # already has types up to 25. See the script header for why nothing
           # else was missing (program types, helpers, instruction set and the
           # min_kver-gated 4.17-5.10 cgroup hooks all check out).
-          python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_map_types.py"
+          if [ "${{ inputs.bpf_devmap_hash }}" != "false" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_map_types.py"
+          else echo "  (DEVMAP_HASH backport SKIPPED by input)"; fi
 
           # Let a modern netbpfload talk to this kernel's bpf() syscall at all.
           # bool-x has a PARTIAL Android bpf_attr backport (map_name/prog_name/
@@ -263,7 +275,9 @@ jobs:
           # sizeof(union bpf_attr) and returns EINVAL on any nonzero byte, so a
           # loader that writes BTF metadata fails EVERY map creation regardless
           # of map type -- which is why fixing DEVMAP_HASH changed nothing.
-          python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_attr.py"
+          if [ "${{ inputs.bpf_attr_abi }}" != "false" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_attr.py"
+          else echo "  (bpf_attr ABI backport SKIPPED by input)"; fi
 
           # Reproduce KameOS's pstore geometry so a failed boot leaves a log we
           # can actually read. The ROM does NOT take ramoops from the DT -- its
