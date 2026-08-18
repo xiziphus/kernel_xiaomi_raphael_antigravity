@@ -37,7 +37,12 @@ import re,sys
 print(re.search(r'Cmdline:\s*(.*)', open(sys.argv[1]).read()).group(1).strip())
 PY
 )"
-CMDLINE="$CMDLINE ramoops_memreserve=4M androidboot.ktest=$KTEST"
+# ignore_loglevel: netbpfload logs through base::KernelLogger, i.e. /dev/kmsg
+# at KERN_INFO. Rikka's console_loglevel drops that, so its pstore console
+# recorded init's "bpfloader ... failed" line and NOT the NetBpfLoad lines
+# that say WHY -- the log looked complete while missing the only part that
+# matters. bool-x happened to ship a higher default and hid the problem.
+CMDLINE="$CMDLINE ramoops_memreserve=4M loglevel=8 ignore_loglevel printk.devkmsg=on androidboot.ktest=$KTEST"
 
 mkdir -p "$(dirname "$OUT")"
 python3 "$REPO/mkbootimg_src/mkbootimg.py" \

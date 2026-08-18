@@ -72,6 +72,11 @@ on:
         required: false
         type: string
         default: ''
+      cgroup_attach_types:
+        description: 'true = declare BPF_CGROUP_UDP4/6_SENDMSG, UDP4/6_RECVMSG, GET/SETSOCKOPT and accept the sendmsg/recvmsg four for CGROUP_SOCK_ADDR (scripts/add_cgroup_attach_types.py). This is the exact thing rikka-v5 lacks: netbpfload loads everything up to netd.o and then EINVALs on recvmsg4_udp4_recvmsg.'
+        required: false
+        type: string
+        default: 'false'
       bpf_graft_scope:
         description: '"sockopt" = graft ONLY the sendmsg/recvmsg + cgroup-sockopt files (what Zundamon actually added to Rikka). "full" = the whole BPF subsystem.'
         required: false
@@ -311,6 +316,10 @@ jobs:
 
           if [ "${{ inputs.rdonly_prog_flag }}" = "true" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/accept_rdonly_prog_flag.py"
+          fi
+
+          if [ "${{ inputs.cgroup_attach_types }}" = "true" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/add_cgroup_attach_types.py"
           fi
 
           if [ -n "${{ inputs.fake_uname }}" ]; then
