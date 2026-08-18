@@ -1,5 +1,34 @@
 # Build preflight
 
+## The model
+
+A preflight exists to stop an **expensive resource** being spent on knowably
+doomed work. So it is organised by *what it protects*, not by "checks someone
+thought of". Two resources matter here, and they are not equally scarce:
+
+* a **CI runner** — ~20 min, free, and massively parallel
+* the **phone** — ~2 min, strictly serial, and a failed boot needs a human to
+  press power. This is the scarce one.
+
+| layer | protects | catches | tool |
+|---|---|---|---|
+| 0 tree facts | runner, first 2 min | ref, defconfig, submodules, DTB gating | `preflight.py` |
+| 1 patch applicability | runner, patch step | scripts abort or silently no-op | `preflight.py --dry-run` |
+| 2 config prediction | **a green build that ships the wrong kernel** | symbol undefined → "lost at config time" | `preflight.py` |
+| 3 compile | runner, 17 min | implicit decls, missing headers, bad shims | smoke gate in CI |
+| 4 image validation | flashing a lie | decoy config; option absent from the COMPILED image | `verify_kernel_config.py` |
+| 5 device readiness | **a boot cycle and the human** | image cannot leave a log; already tested | `preflight_image.py` |
+
+Layer 2 is the most dangerous because it fails **silently** — CI once printed
+`config OK` for all 12 options and shipped `# CONFIG_PID_NS is not set`.
+
+Layer 5 is the most valuable day to day, because it is the only one guarding a
+resource that cannot be parallelised. Its key check is not "will it boot" but
+**"if it fails, will it tell us why"** — an image without
+`qcom,force-warm-reboot` produces a silent failure, which burns the cycle and
+yields nothing. That is how most device time in this project was wasted.
+
+
 Run this before launching a build. Every item is here because it actually broke
 a build in this project and cost a ~20-minute runner.
 
