@@ -157,6 +157,11 @@ def rewrite_dts_nodes(base="0xB0000000") -> int:
         for fn in files:
             if not fn.endswith((".dts", ".dtsi")):
                 continue
+            # ONLY files raphael actually builds. An earlier version rewrote the
+            # ramoops node in apq8016-sbc.dtsi (a Dragonboard 410c), counted it
+            # as done, and left sm8150.dtsi -- the one that ships -- untouched.
+            if not ("sm8150" in fn or "raphael" in fn):
+                continue
             p = os.path.join(root, fn)
             try:
                 s = open(p, encoding="utf-8", errors="replace").read()
