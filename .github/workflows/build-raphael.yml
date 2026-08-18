@@ -255,47 +255,17 @@ jobs:
           # min_kver-gated 4.17-5.10 cgroup hooks all check out).
           python3 "$GITHUB_WORKSPACE/scripts/backport_bpf_map_types.py"
 
-          # Point ramoops at the SAME region the ROM uses, so a boot that fails
-          # in userspace leaves a log the ROM can read on the next boot.
-          #
-          # bool-x reserves 8 MB at 0xa1600000 with only record-size+pmsg-size
-          # (no console), while KameOS's kernel registers pstore from a built-in
-          # platform device somewhere else entirely. Read off the running ROM
-          # with root (/sys/module/ramoops/parameters/*):
-          #     mem_address=0xB0000000  mem_size=0x400000
-          #     console_size=0x200000   pmsg_size=0x200000   record_size=0
-          # Because the addresses differed, our console records were invisible
-          # to KameOS's reader and `logcat -L` came back empty. Matching the
-          # geometry exactly makes both channels work after a failed boot:
-          #     adb shell dumpsys dropbox --print SYSTEM_LAST_KMSG   (console)
-          #     adb shell logcat -L                                  (pmsg)
-          # ecc-size must be 0 — the ROM's reader uses no ECC, and a mismatched
-          # ECC config makes the records unparseable.
-          RAMOOPS_BASE="${RAMOOPS_BASE:-0xB0000000}"
-          for dts in arch/arm64/boot/dts/qcom/sm8150.dtsi; do
-            [ -f "$dts" ] || continue
-            python3 - "$dts" "$RAMOOPS_BASE" <<'PY'
-          import re,sys
-          p,base=sys.argv[1],sys.argv[2]
-          s=open(p).read()
-          m=re.search(r'ramoops[^{]*\{[^}]*\}\s*;', s, re.S)
-          if not m:
-              print("  ramoops: no node found, skipping"); raise SystemExit(0)
-          node = ("ramoops: ramoops@%s {\n"
-                  "\t\t\tcompatible = \"ramoops\";\n"
-                  "\t\t\treg = <0x0 %s 0x0 0x400000>;\n"
-                  "\t\t\trecord-size = <0x0>;\n"
-                  "\t\t\tconsole-size = <0x200000>;\n"
-                  "\t\t\tpmsg-size = <0x200000>;\n"
-                  "\t\t\tecc-size = <0>;\n"
-                  "\t\t};") % (base[2:].lower(), base)
-          s = s[:m.start()] + node + s[m.end():]
-          open(p,'w').write(s)
-          print(f"  ramoops: relocated to {base} (4MB: console 2MB + pmsg 2MB, ecc 0)")
-          print( "           matches the ROM's own pstore region so a failed")
-          print( "           boot is readable via dropbox / logcat -L")
-          PY
-          done
+          # Reproduce KameOS's pstore geometry so a failed boot leaves a log we
+          # can actually read. The ROM does NOT take ramoops from the DT -- its
+          # cmdline carries `ramoops_memreserve=4M`, which a Xiaomi patch in
+          # fs/pstore/ram.c turns into a hardcoded 0xB0000000 region registered
+          # as a plain platform device. That is why there is no device-tree node
+          # for it and why every region we declared in DTS was invisible to the
+          # ROM's reader. The script installs that same mechanism and deletes any
+          # DT ramoops node so the two can't collide. After a failed test boot:
+          #   adb shell su -c 'dumpsys dropbox --print SYSTEM_LAST_KMSG'  (console)
+          #   adb shell su -c 'logcat -L -b all'                          (pmsg)
+          python3 "$GITHUB_WORKSPACE/scripts/xiaomi_ramoops.py"
 
           ccache -M 15G >/dev/null 2>&1 || true; ccache -z >/dev/null 2>&1 || true
 
