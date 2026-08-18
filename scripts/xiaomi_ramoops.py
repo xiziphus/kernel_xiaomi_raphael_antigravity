@@ -135,11 +135,25 @@ def patch_ram_c() -> bool:
     return True
 
 
-def drop_dts_nodes() -> int:
-    """Delete DT ramoops nodes so they can't reserve a second region or win the
-    platform-device race against ours."""
+def rewrite_dts_nodes(base="0xB0000000") -> int:
+    """Rewrite DT ramoops nodes to the ROM's exact geometry.
+
+    This is the PROVEN channel: a kernel built this way produced 40 KB of
+    readable console-ramoops-0 on KameOS (waffleowo, 2026-08-18). An earlier
+    revision of this script deleted the node and relied solely on the
+    memreserve platform device instead -- that produced NO pstore records at
+    all on bool-x, so the DT node is preferred wherever one exists.
+    """
+    node = ("ramoops: ramoops@%s {\n"
+            "\t\t\tcompatible = \"ramoops\";\n"
+            "\t\t\treg = <0x0 %s 0x0 0x400000>;\n"
+            "\t\t\trecord-size = <0x0>;\n"
+            "\t\t\tconsole-size = <0x200000>;\n"
+            "\t\t\tpmsg-size = <0x200000>;\n"
+            "\t\t\tecc-size = <0>;\n"
+            "\t\t};") % (base[2:].lower(), base)
     n = 0
-    for root, _dirs, files in os.walk("arch/arm64/boot/dts"):
+    for root, _dirs, files in os.walk("arch/arm64/boot/dts/qcom"):
         for fn in files:
             if not fn.endswith((".dts", ".dtsi")):
                 continue
@@ -148,20 +162,22 @@ def drop_dts_nodes() -> int:
                 s = open(p, encoding="utf-8", errors="replace").read()
             except OSError:
                 continue
-            if "ramoops" not in s:
+            m = re.search(r"\w*:?\s*ramoops@[0-9a-fA-F]+\s*\{[^{}]*\}\s*;", s, re.S)
+            if not m:
                 continue
-            new = re.sub(r"[ \t]*\w*:?\s*ramoops@[0-9a-fA-F]+\s*\{[^{}]*\}\s*;\s*\n?",
-                         "", s)
-            if new != s:
-                open(p, "w", encoding="utf-8").write(new)
-                print("  dts: removed ramoops node from %s" % p)
-                n += 1
-    if not n:
-        print("  dts: no ramoops node found (fine -- nothing to collide with)")
+            open(p, "w", encoding="utf-8").write(s[:m.start()] + node + s[m.end():])
+            print("  dts: %s -> %s (4MB: console 2MB + pmsg 2MB, record 0, ecc 0)" % (p, base))
+            n += 1
     return n
 
 
 if __name__ == "__main__":
-    a = patch_ram_c()
-    b = drop_dts_nodes()
-    print("  xiaomi ramoops: %s" % ("applied" if (a or b) else "nothing to do"))
+    # Prefer the DT node -- it is the channel we have actually seen work.
+    # Only fall back to the vendor cmdline mechanism when the tree has no node
+    # to fix, so we never end up with two competing ramoops devices.
+    n = rewrite_dts_nodes()
+    if n:
+        print("  xiaomi ramoops: %d DT node(s) set to the ROM geometry" % n)
+    else:
+        print("  no DT ramoops node; installing the cmdline mechanism instead")
+        patch_ram_c()
