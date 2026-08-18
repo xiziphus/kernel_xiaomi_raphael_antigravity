@@ -25,16 +25,33 @@ both in its kallsyms.)
 
 What this does
 --------------
-Registers type 17 against the tree's existing `dev_map_ops`, whose
-dev_map_alloc validation (key_size==4, value_size==4, max_entries!=0) accepts
-4/4/1024 exactly, and teaches the verifier that XSKMAP is a legal map for
-bpf_redirect_map -- the only helper the program uses it with (the other two
-helper calls, map_lookup_elem and map_update_elem, act on the object's second
-map, a plain HASH).
+Registers type 17 against the tree's existing `array_map_ops`, whose
+array_map_alloc validation (key_size==4, value_size!=0, max_entries!=0,
+map_flags within ARRAY_CREATE_FLAG_MASK) accepts 4/4/1024/0 exactly, and
+teaches the verifier that XSKMAP is a legal map for bpf_redirect_map -- the
+only helper the program uses it with (the other two helper calls,
+map_lookup_elem and map_update_elem, act on the object's second map, a plain
+HASH).
+
+NOT dev_map_ops, which was the first choice and failed on device:
+
+    bpf map name mi_xsk_port_map mismatch: desired/found:
+        type:17/17 key:4/4 value:4/4 entries:1024/1024 flags:0/128
+
+kernel/bpf/devmap.c:121 does `attr->map_flags |= BPF_F_RDONLY_PROG;` ("Lookup
+returns a pointer straight to dev->ifindex, so make sure the verifier prevents
+writes from the BPF side"). The loader asks for flags=0 on an XSKMAP, reads
+back 128, and refuses the map with -ENOTUNIQ.
+
+That same line is the answer to the long-standing bool-x mystery, from the
+other direction: bool-x's older dev_map_alloc does NOT force the flag, so when
+the loader asked for BPF_F_RDONLY_PROG on tether_dev_map it read back 0 --
+`flags:128/0`. Widening the CREATE_FLAG_MASKs could never fix that, which is
+why it did not. The flag is set by the allocator, not accepted from userspace.
 
 Being honest about the aliasing: this makes the map *creatable and verifiable*,
-not functional. A real XSKMAP redirects into an AF_XDP socket's ring; a devmap
-holds netdevs. Nothing ever populates this map -- that would need an AF_XDP
+not functional. A real XSKMAP redirects into an AF_XDP socket's ring; an array
+holds plain u32s. Nothing ever populates this map -- that would need an AF_XDP
 socket fd, and there are none on this kernel -- so the lookup inside
 bpf_redirect_map finds nothing and the program falls through to XDP_PASS. The
 cost is that Xiaomi's RTP fast path does not accelerate. The benefit is that
@@ -74,13 +91,13 @@ def main():
     if "BPF_MAP_TYPE_XSKMAP" in src:
         print("  bpf_types.h: already registered")
     else:
-        anchor = "BPF_MAP_TYPE(BPF_MAP_TYPE_DEVMAP, dev_map_ops)\n"
+        anchor = "BPF_MAP_TYPE(BPF_MAP_TYPE_ARRAY, array_map_ops)\n"
         if anchor not in src:
-            sys.exit("FATAL: DEVMAP registration not found in " + TYPES)
+            sys.exit("FATAL: ARRAY registration not found in " + TYPES)
         src = src.replace(
-            anchor, anchor + "BPF_MAP_TYPE(BPF_MAP_TYPE_XSKMAP, dev_map_ops)\n", 1)
+            anchor, anchor + "BPF_MAP_TYPE(BPF_MAP_TYPE_XSKMAP, array_map_ops)\n", 1)
         open(TYPES, "w", encoding="utf-8").write(src)
-        print("  bpf_types.h: XSKMAP -> dev_map_ops")
+        print("  bpf_types.h: XSKMAP -> array_map_ops")
         changed += 1
 
     src = open(VERIFIER, encoding="utf-8", errors="replace").read()
@@ -104,7 +121,7 @@ def main():
         changed += 1
 
     for path, need in ((UAPI, "BPF_MAP_TYPE_XSKMAP = 17"),
-                       (TYPES, "BPF_MAP_TYPE(BPF_MAP_TYPE_XSKMAP, dev_map_ops)"),
+                       (TYPES, "BPF_MAP_TYPE(BPF_MAP_TYPE_XSKMAP, array_map_ops)"),
                        (VERIFIER, "case BPF_MAP_TYPE_XSKMAP:")):
         if need not in open(path, encoding="utf-8", errors="replace").read():
             sys.exit("FATAL: %r missing from %s after patch" % (need, path))
