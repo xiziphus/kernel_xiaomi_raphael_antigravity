@@ -34,13 +34,18 @@ def add_flag_defs():
     if "BPF_F_RDONLY_PROG" in src:
         print("  uapi: RDONLY_PROG/WRONLY_PROG already defined")
         return False
-    m = re.search(r"#define BPF_F_ZERO_SEED\s+\(1U << (\d+)\)\n", src)
-    anchor = m.group(0) if m else None
+    anchor = None
+    # Anchor on whatever BPF_F_* the tree actually has -- 4.14 headers stop well
+    # before ZERO_SEED, which is why keying off it aborted the build.
+    for cand in ("BPF_F_ZERO_SEED", "BPF_F_STACK_BUILD_ID", "BPF_F_RDONLY",
+                 "BPF_F_NUMA_NODE", "BPF_F_NO_COMMON_LRU", "BPF_F_NO_PREALLOC"):
+        m = re.search(r"#define %s\s+\(1U << \d+\)\n" % cand, src)
+        if m:
+            anchor = m.group(0)
+            break
     if not anchor:
-        m = re.search(r"#define BPF_F_STACK_BUILD_ID\s+\(1U << (\d+)\)\n", src)
-        anchor = m.group(0) if m else None
-    if not anchor:
-        sys.exit("FATAL: no BPF_F_* anchor found in " + UAPI)
+        print("  uapi: no BPF_F_* anchor; skipping (nothing to hang the flags off)")
+        return False
     add = ("/* Flags for accessing BPF object from program side. */\n"
            "#define BPF_F_RDONLY_PROG\t(1U << 7)\n"
            "#define BPF_F_WRONLY_PROG\t(1U << 8)\n")

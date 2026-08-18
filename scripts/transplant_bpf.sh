@@ -97,6 +97,30 @@ static inline u32 skb_metadata_len(const struct sk_buff *skb)
 #define kallsyms_show_value(...) (false)
 #endif
 
+
+/* 5.x core helpers the donor's kernel/bpf/*.c call, with 4.14 equivalents. */
+#ifndef atomic_fetch_add_unless
+#define atomic_fetch_add_unless(v, a, u)	__atomic_add_unless((v), (a), (u))
+#endif
+
+#ifndef ktime_get_boottime_ns
+#define ktime_get_boottime_ns()			ktime_get_boot_ns()
+#endif
+
+#ifndef ktime_get_coarse_boottime_ns
+#define ktime_get_coarse_boottime_ns()		ktime_get_boot_ns()
+#endif
+
+/* perf BPF notifications (5.1). Purely observability -- stub them out. */
+#ifndef PERF_BPF_EVENT_PROG_LOAD
+enum perf_bpf_event_type {
+	PERF_BPF_EVENT_UNKNOWN		= 0,
+	PERF_BPF_EVENT_PROG_LOAD	= 1,
+	PERF_BPF_EVENT_PROG_UNLOAD	= 2,
+};
+#define perf_event_bpf_event(prog, type, flags) do { } while (0)
+#endif
+
 #endif /* _BPF_TRANSPLANT_COMPAT_H */
 SHIM
 
@@ -114,6 +138,12 @@ if "bpf_transplant_compat.h" not in s:
     open(p, "w", encoding="utf-8").write(s)
     print("    filter.h: pulled in bpf_transplant_compat.h")
 PYINJ
+# syscall.c/verifier.c call these too, so pull the shims in there as well.
+for f in kernel/bpf/syscall.c kernel/bpf/verifier.c kernel/bpf/core.c kernel/bpf/cgroup.c; do
+  [ -f "$f" ] || continue
+  grep -q bpf_transplant_compat.h "$f" || \
+    sed -i '0,/^#include /s//#include <linux\/bpf_transplant_compat.h>\n#include /' "$f"
+done
 echo "  compat shims installed"
 
 rm -rf "$(dirname "$D")"
