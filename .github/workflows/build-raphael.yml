@@ -77,6 +77,11 @@ on:
         required: false
         type: string
         default: 'false'
+      cgroup_sockopt:
+        description: 'true = add BPF_PROG_TYPE_CGROUP_SOCKOPT (25) + struct bpf_sockopt so netd.o''s four-instruction getsockopt/setsockopt programs LOAD (scripts/add_cgroup_sockopt.py). Load-only: the runtime hooks are not wired up. Needs cgroup_attach_types=true.'
+        required: false
+        type: string
+        default: 'false'
       bpf_graft_scope:
         description: '"sockopt" = graft ONLY the sendmsg/recvmsg + cgroup-sockopt files (what Zundamon actually added to Rikka). "full" = the whole BPF subsystem.'
         required: false
@@ -320,6 +325,10 @@ jobs:
 
           if [ "${{ inputs.cgroup_attach_types }}" = "true" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/add_cgroup_attach_types.py"
+          fi
+
+          if [ "${{ inputs.cgroup_sockopt }}" = "true" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/add_cgroup_sockopt.py"
           fi
 
           if [ -n "${{ inputs.fake_uname }}" ]; then
