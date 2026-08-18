@@ -219,6 +219,44 @@ def force_warm_reboot() -> int:
     return n
 
 
+
+def insert_dts_node(base="0xB0000000") -> int:
+    """Add a ramoops node to reserved-memory when the tree has none.
+
+    Rikka has no ramoops@ node, so an earlier version of this script fell back
+    to the ramoops_memreserve cmdline path -- which has never once produced a
+    readable buffer, on any tree. The DT route is the one we have actually seen
+    work (waffleowo, bool-x), so create the node rather than fall back.
+    """
+    node = (
+        "\n\t\tramoops: ramoops@%s {\n"
+        "\t\t\tcompatible = \"ramoops\";\n"
+        "\t\t\treg = <0x0 %s 0x0 0x400000>;\n"
+        "\t\t\trecord-size = <0x0>;\n"
+        "\t\t\tconsole-size = <0x200000>;\n"
+        "\t\t\tpmsg-size = <0x200000>;\n"
+        "\t\t\tecc-size = <0>;\n"
+        "\t\t};\n") % (base[2:].lower(), base)
+    for root, _dirs, files in os.walk("arch/arm64/boot/dts/qcom"):
+        for name in files:
+            if not name.endswith(".dtsi"):
+                continue
+            fp = os.path.join(root, name)
+            try:
+                txt = open(fp, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            m = re.search(r"reserved[_-]memory\s*:\s*reserved-memory\s*\{", txt)
+            if not m:
+                continue
+            at = txt.index("\n", m.end())
+            open(fp, "w", encoding="utf-8").write(txt[:at] + node + txt[at:])
+            print("  dts: INSERTED ramoops@%s into reserved-memory in %s" % (base[2:], fp))
+            return 1
+    print("  dts: no reserved-memory node to insert into")
+    return 0
+
+
 if __name__ == "__main__":
     # Prefer the DT node -- it is the channel we have actually seen work.
     # Only fall back to the vendor cmdline mechanism when the tree has no node
@@ -228,5 +266,8 @@ if __name__ == "__main__":
     if n:
         print("  xiaomi ramoops: %d DT node(s) set to the ROM geometry" % n)
     else:
-        print("  no DT ramoops node; installing the cmdline mechanism instead")
-        patch_ram_c()
+        # Prefer creating the node over the cmdline mechanism: the DT route is
+        # the only one we have observed to actually yield a readable buffer.
+        if not insert_dts_node():
+            print("  no reserved-memory to extend; falling back to the cmdline path")
+            patch_ram_c()
