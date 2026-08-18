@@ -35,6 +35,17 @@ include/linux/btf.h include/linux/filter.h include/linux/bpf-cgroup.h
 include/uapi/linux/bpf.h include/uapi/linux/btf.h include/uapi/linux/bpf_common.h
 net/core/filter.c net/core/sock_map.c net/core/bpf_sk_storage.c
 "
+# Copy every bpf/btf header the donor has, rather than guessing a list: the
+# enumerated version missed linux/bpf_lirc.h and cost a build. Globs first,
+# explicit list second.
+for pat in "include/linux/bpf*.h" "include/uapi/linux/bpf*.h" \
+           "include/linux/btf*.h" "include/uapi/linux/btf*.h"; do
+  for f in $(cd "$D" && ls $pat 2>/dev/null); do
+    mkdir -p "$(dirname "$f")"; cp "$D/$f" "$f"
+  done
+done
+echo "  headers: globbed bpf*/btf* from donor"
+
 n=0; miss=0
 for f in $FILES; do
   if [ -f "$D/$f" ]; then
