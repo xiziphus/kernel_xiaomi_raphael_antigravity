@@ -55,24 +55,42 @@ def add_flag_defs():
 
 
 def widen_flag_masks():
-    """Let the allocators through. 4.14 validates with masks like
-    `attr->map_flags & ~BPF_F_NUMA_NODE`, which rejects anything newer."""
+    """Widen the *_CREATE_FLAG_MASK macros.
+
+    First attempt targeted the usage site (`attr->map_flags & ~BPF_F_NUMA_NODE`)
+    and matched nothing, because every allocator masks with a macro:
+
+        #define DEV_CREATE_FLAG_MASK \\
+            (BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY)
+        ... attr->map_flags & ~DEV_CREATE_FLAG_MASK
+
+    The script reported "applied" purely on the uapi defines, the allocator kept
+    rejecting the flag, and the device came back with the identical
+    flags:128/0 mismatch. Patch the macro, and verify something actually changed.
+    """
     n = 0
-    for path in (DEVMAP, "kernel/bpf/arraymap.c", "kernel/bpf/hashtab.c",
-                 "kernel/bpf/lpm_trie.c", SYSCALL):
+    # The five allocators all end their mask list with `BPF_F_WRONLY)`, and that
+    # exact text appears nowhere else, so a literal substitution is both
+    # sufficient and safer than a multi-line regex (the regex version silently
+    # matched nothing and the script still reported "applied").
+    OLD = "BPF_F_RDONLY | BPF_F_WRONLY)"
+    NEW = "BPF_F_RDONLY | BPF_F_WRONLY | BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)"
+    for path in ("kernel/bpf/devmap.c", "kernel/bpf/arraymap.c", "kernel/bpf/hashtab.c",
+                 "kernel/bpf/lpm_trie.c", "kernel/bpf/stackmap.c",
+                 "kernel/bpf/sockmap.c", "kernel/bpf/cpumap.c"):
         if not os.path.exists(path):
             continue
         src = open(path, encoding="utf-8", errors="replace").read()
-        out = src
-        # Widen the "unknown flag" masks to also permit the two new bits.
-        out = re.sub(r"~\(BPF_F_NUMA_NODE\)", "~(BPF_F_NUMA_NODE | BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)", out)
-        out = re.sub(r"~BPF_F_NUMA_NODE\b", "~(BPF_F_NUMA_NODE | BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)", out)
-        out = re.sub(r"~\(BPF_F_NO_PREALLOC \| BPF_F_NO_COMMON_LRU \| BPF_F_NUMA_NODE\)",
-                     "~(BPF_F_NO_PREALLOC | BPF_F_NO_COMMON_LRU | BPF_F_NUMA_NODE | BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)", out)
-        if out != src:
-            open(path, "w", encoding="utf-8").write(out)
-            print("  %s: widened map_flags mask" % path)
-            n += 1
+        if "BPF_F_RDONLY_PROG" in src:
+            continue
+        if OLD not in src:
+            continue
+        open(path, "w", encoding="utf-8").write(src.replace(OLD, NEW))
+        print("  %s: widened CREATE_FLAG_MASK" % path)
+        n += 1
+    if not n:
+        print("  WARNING: no CREATE_FLAG_MASK widened -- allocators will still "
+              "reject BPF_F_RDONLY_PROG and the map will mismatch as flags:128/0")
     return n
 
 
