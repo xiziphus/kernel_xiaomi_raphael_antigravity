@@ -176,6 +176,7 @@ Several things the scripts call are not actually present in a clean checkout:
 ## Docs map
 
 - [docs/JOURNEY.md](docs/JOURNEY.md) — every failure and its root cause; read before debugging a boot problem.
+- [docs/KAMEOS_DOCKER_JOURNEY.md](docs/KAMEOS_DOCKER_JOURNEY.md) — Docker on KameOS (HyperOS 3 / Android 16). The lineage wall, the config decoy, how to parse the ROM's own BPF objects, the DEVMAP_HASH fix, the netbpfload dead end, and how to recover a fastboot-stuck raphael.
 - [docs/NATIVE_DOCKER.md](docs/NATIVE_DOCKER.md) — running Docker on bionic with no chroot. Lab notebook: hypotheses, tests, dead ends, and the two upstream patches it needs. Disproves the PIE blocker.
 - [docs/TECHNICAL.md](docs/TECHNICAL.md) — boot sequence, FBE key derivation, boot header layout, Kconfig dependency behavior.
 - [docs/FAQ.md](docs/FAQ.md), [docs/BEGINNERS_GUIDE.md](docs/BEGINNERS_GUIDE.md) — user-facing.

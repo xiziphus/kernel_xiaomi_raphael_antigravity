@@ -9,6 +9,7 @@ Welcome to the Redmi K20 Pro Docker Kernel documentation!
 
 **Want to understand what happened?** Read this:
 - 📖 [The Journey](JOURNEY.md) - Complete development story with all pitfalls and solutions
+- 🧭 [KameOS Docker Journey](KAMEOS_DOCKER_JOURNEY.md) - Docker on HyperOS 3 / Android 16: the MIUI-vs-AOSP lineage wall, the falsified /proc/config.gz, and the netbpfload blocker
 
 **Need technical details?** Check this:
 - 🔧 [Technical Deep Dive](TECHNICAL.md) - Advanced topics: boot process, encryption, Kconfig
