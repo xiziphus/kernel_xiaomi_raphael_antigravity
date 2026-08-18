@@ -98,7 +98,7 @@ static inline u32 skb_metadata_len(const struct sk_buff *skb)
 #endif
 
 
-/* 5.x core helpers the donor's kernel/bpf/*.c call, with 4.14 equivalents. */
+/* 5.x core helpers the donor BPF sources call, with 4.14 equivalents. */
 #ifndef atomic_fetch_add_unless
 #define atomic_fetch_add_unless(v, a, u)	__atomic_add_unless((v), (a), (u))
 #endif
