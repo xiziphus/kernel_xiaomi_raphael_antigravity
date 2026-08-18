@@ -146,6 +146,31 @@ enum perf_bpf_event_type {
 #define perf_event_bpf_event(prog, type, flags) do { } while (0)
 #endif
 
+
+/* flow_dissector BPF (5.0) -- the donor's syscall.c references these for
+ * BPF_PROG_TYPE_FLOW_DISSECTOR attach/detach/query. Nothing on Android loads a
+ * flow_dissector program, so refusing the operation is correct behaviour, not
+ * a degradation. */
+#ifndef BPF_TRANSPLANT_HAVE_FLOW_DISSECTOR
+struct bpf_prog;
+struct netlink_ext_ack;
+union bpf_attr;
+static inline int skb_flow_dissector_bpf_prog_attach(const union bpf_attr *attr,
+						     struct bpf_prog *prog)
+{ return -EINVAL; }
+static inline int skb_flow_dissector_bpf_prog_detach(const union bpf_attr *attr)
+{ return -EINVAL; }
+static inline int skb_flow_dissector_prog_query(const union bpf_attr *attr,
+						union bpf_attr __user *uattr)
+{ return -EINVAL; }
+#endif
+
+/* BPF_CALL_ARGS (5.0) lives in filter.h upstream; the donor's syscall.c uses it
+ * for the interpreter-with-args entry point. */
+#ifndef BPF_CALL_ARGS
+#define BPF_CALL_ARGS(a, b, c, d, e, f) ({ (void)(a); 0; })
+#endif
+
 #endif /* _BPF_TRANSPLANT_COMPAT_H */
 SHIM
 
