@@ -29,7 +29,14 @@ echo "  local           -> $(sed -n '2,4p' Makefile | tr '\n' ' ')"
 #   * sendmsg/recvmsg attach types -- route through the EXISTING sock_addr hook
 #   * cgroup sockopt (5.3)         -- new prog type + get/setsockopt hooks
 # Far smaller surface than the 40-file graft, and it matches the historical path.
-if [ "${BPF_GRAFT_SCOPE:-full}" = "sockopt" ]; then
+if [ "${BPF_GRAFT_SCOPE:-full}" = "devmap" ]; then
+  # Smallest useful graft: the REAL DEVMAP_HASH. Our backport aliases type 25
+  # onto 4.14's array-based dev_map_ops, and the loader rejects the result
+  # (flags:128/0) even with the flag masks widened -- proven on device. KameOS
+  # has the genuine dev_map_hash_ops, so take devmap.c wholesale.
+  FILES="kernel/bpf/devmap.c include/linux/bpf_types.h include/uapi/linux/bpf.h"
+  echo "  scope: devmap only (real dev_map_hash_ops)"
+elif [ "${BPF_GRAFT_SCOPE:-full}" = "sockopt" ]; then
   FILES="
 kernel/bpf/cgroup.c kernel/bpf/syscall.c kernel/bpf/verifier.c
 include/linux/bpf-cgroup.h include/linux/bpf.h include/linux/bpf_types.h

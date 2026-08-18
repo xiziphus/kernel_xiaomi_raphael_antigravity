@@ -30,27 +30,33 @@ DEVMAP = "kernel/bpf/devmap.c"
 
 
 def add_flag_defs():
+    """Add whichever of the two flags is missing -- independently.
+
+    Rikka already defines BPF_F_RDONLY_PROG but not BPF_F_WRONLY_PROG. The
+    first version bailed out if EITHER was present, so it added neither, while
+    widen_flag_masks() still referenced both -- and the smoke gate caught
+    `use of undeclared identifier 'BPF_F_WRONLY_PROG'` in 11 seconds.
+    """
     src = open(UAPI, encoding="utf-8", errors="replace").read()
-    if "BPF_F_RDONLY_PROG" in src:
-        print("  uapi: RDONLY_PROG/WRONLY_PROG already defined")
+    want = [("BPF_F_RDONLY_PROG", 7), ("BPF_F_WRONLY_PROG", 8)]
+    missing = [(n, b) for n, b in want if n not in src]
+    if not missing:
+        print("  uapi: both RDONLY_PROG and WRONLY_PROG already defined")
         return False
     anchor = None
-    # Anchor on whatever BPF_F_* the tree actually has -- 4.14 headers stop well
-    # before ZERO_SEED, which is why keying off it aborted the build.
-    for cand in ("BPF_F_ZERO_SEED", "BPF_F_STACK_BUILD_ID", "BPF_F_RDONLY",
-                 "BPF_F_NUMA_NODE", "BPF_F_NO_COMMON_LRU", "BPF_F_NO_PREALLOC"):
+    for cand in ("BPF_F_ZERO_SEED", "BPF_F_STACK_BUILD_ID", "BPF_F_RDONLY_PROG",
+                 "BPF_F_RDONLY", "BPF_F_NUMA_NODE", "BPF_F_NO_COMMON_LRU",
+                 "BPF_F_NO_PREALLOC"):
         m = re.search(r"#define %s\s+\(1U << \d+\)\n" % cand, src)
         if m:
             anchor = m.group(0)
             break
     if not anchor:
-        print("  uapi: no BPF_F_* anchor; skipping (nothing to hang the flags off)")
+        print("  uapi: no BPF_F_* anchor; skipping")
         return False
-    add = ("/* Flags for accessing BPF object from program side. */\n"
-           "#define BPF_F_RDONLY_PROG\t(1U << 7)\n"
-           "#define BPF_F_WRONLY_PROG\t(1U << 8)\n")
+    add = "".join("#define %s\t(1U << %d)\n" % (n, b) for n, b in missing)
     open(UAPI, "w", encoding="utf-8").write(src.replace(anchor, anchor + add, 1))
-    print("  uapi: added BPF_F_RDONLY_PROG (1<<7) / BPF_F_WRONLY_PROG (1<<8)")
+    print("  uapi: added %s" % ", ".join(n for n, _ in missing))
     return True
 
 
