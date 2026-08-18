@@ -417,3 +417,154 @@ Found by search; all carry DEVMAP_HASH, the full cgroup attach types and
 | `hxsyzl/kernel_xiaomi_raphael@{16.0-raphael,dynamic}` | 4.14.357 | has `raphael_defconfig`, biggest `btf.c`, and **implements `ramoops_memreserve`** — the source of the pstore patch above |
 | `waffleowo/kernel_xiaomi_raphael_bpf@bpf-5.4-backport` | 4.14.353 | explicit BPF-5.4-backport onto raphael, incl. "fake uname to 5.4.186" |
 | `HeliumStudio-Dev/kernel_xiaomi_raphael_5.4@zundamon-miui-5.4` | 5.4.302 | MIUI lineage on 5.4, where every netbpfload requirement is native |
+
+## 15. THE ROOT CAUSE: netbpfload refuses any kernel below 5.4 (2026-08-18)
+
+Everything in sections 5-14 was chasing symptoms. The cause is a version gate,
+and it was never reached by any BPF feature we investigated.
+
+### 15.1 The log that ended it
+
+With the warm-reset pstore fix (14.6 + below), the first readable log from a
+failed boot said:
+
+```
+[   14.565835] NetBpfLoad: Android V requires kernel 4.19.
+[   14.571829] init: Service bpfloader has 'reboot_on_failure' option and failed
+```
+
+`strings` on `/apex/com.android.tethering/bin/netbpfload` gives the full ladder:
+
+```
+Android S & T require kernel 4.9.
+Android U    requires kernel 4.14.
+Android V    requires kernel 4.19.
+Android 25Q2 requires kernel 5.4.     <- netbpfload.rc says this ROM is 25q2
+```
+
+### 15.2 Confirmed by prediction, not by fitting
+
+Claiming 4.19 (`fake_uname=4.19.0`) moved the failure to the **next rung**,
+exactly as the ladder predicts:
+
+```
+[   14.643684] NetBpfLoad: Android 25Q2 requires kernel 5.4.
+```
+
+Claiming 5.4.186 cleared both gates and reached real BPF work:
+
+```
+NetBpfLoad: bpf map name tether_dev_map mismatch:
+            desired/found: type:25/25 key:4/4 value:4/4 entries:64/64 flags:128/0
+NetBpfLoad: Failed to create maps: (ret=-76) in .../offload.o
+```
+
+Note `type:25/25` -- **the DEVMAP_HASH backport works**. The only mismatch is
+`flags:128` = `BPF_F_RDONLY_PROG` (5.2), which 4.14's `dev_map_alloc` drops.
+
+### 15.3 How KameOS's own 4.14 kernel passes -- disassembled
+
+`uname -r` on the ROM reports `4.14.356-Zundamon-v3.0`, so the gate should
+reject it too. It does not, because the kernel lies to exactly three callers.
+Decompressed the shipped Image, found ADRP/ADD pairs referencing the string
+`netbpfload`, and disassembled (capstone; kallsyms addresses are pointer-hashed
+and there is no /proc/kcore, so this was done offline against the image):
+
+```asm
+add  x1, x1, #0xa63    ; "bpfloader"
+add  x0, x21, #0x6d0   ; current->comm
+mov  w2, #9            ; strncmp(comm, "bpfloader", 9)
+cbz  w0, spoof
+...                    ; likewise "netbpfload" (10) and "netd" (4)
+mov  x8, #0x2e35       ; "5."
+movk x8, #0x2e34, lsl #16   ; "4."
+movk x8, #0x3831, lsl #32   ; "18"
+movk x8, #0x36,   lsl #48   ; "6"
+stur x8, [sp, #0x8c]   ; utsname.release = "5.4.186"
+```
+
+So Zundamon spoofs `uname()` to **5.4.186** for `bpfloader`, `netbpfload` and
+`netd` only. `scripts/fake_uname_bpfloader.py` reproduces this. There is one
+extra guard in the ROM's version (a task_struct field checked before spoofing,
+consistent with the upstream "only fake uname on the very first call" commit)
+which we do not replicate.
+
+### 15.4 What claiming a version costs you
+
+The claim is a promise. netbpfload skips programs whose `min_kver` exceeds the
+running kernel, so a higher claim makes it demand more:
+
+| claim | additionally attempted | needs |
+|---|---|---|
+| 4.19 | bind4/6, connect4/6, udp sendmsg/recvmsg | `CGROUP_SOCK_ADDR` |
+| 5.4 | + get/setsockopt | `CGROUP_SOCKOPT` |
+
+Hence the hook audit. **No single tree has both halves:**
+
+| tree | cgroup hooks | boots KameOS |
+|---|---|---|
+| bool-x 16-HyperMiui | 0/8 | **yes** |
+| Rikka rikka-v5 | 4/8 | **yes** |
+| qaz a16-hyper | 8/8 | not a device tree (donor only) |
+| hxsyzl dynamic | 8/8 | no -- powers off pre-init |
+| waffleowo | 8/8 | no -- init panic, exit 127 |
+
+### 15.5 Lineage, confirmed from the running binary
+
+The Helium changelog states *"Renamed kernel name from Rikka to Zundamon"*, and
+KameOS's own kallsyms carry `cass_` (3) and EEVDF symbols (4) -- both listed in
+that changelog -- plus 107 `ksu_` symbols. So **KameOS = Zundamon = Rikka
+lineage**, and Rikka is the correct base. Rikka also reaches
+`reboot,bpfloader-failed`, making it the second tree ever to boot this ROM.
+
+KameOS's kernel also lacks `skb_metadata_len`, `cant_sleep` and
+`set_vm_flush_reset_perms` -- so Zundamon hit the same 4.14-core gap our BPF
+graft hits, and solved it the same way.
+
+### 15.6 Reconstruction
+
+    KameOS kernel  ~=  Rikka  +  5.x BPF graft  +  uname spoof to 5.4.186
+
+## 16. Why failed boots were invisible, and the fix
+
+Matching the ROM's ramoops geometry byte-for-byte is necessary but **not
+sufficient**: on this device a clean reboot does not preserve the region at all.
+Proven by writing a marker to `/dev/kmsg` on KameOS's own kernel, running
+`adb reboot`, and finding `/sys/fs/pstore` empty. Only a panic survived -- which
+is why waffleowo (kernel panic) left 40 KB and bool-x (init reboots cleanly on
+bpfloader failure) left nothing.
+
+A hard PMIC reset re-initialises DDR. `msm-poweroff.c` already supports the fix
+and it needs no C change: `msm_restart_prepare()` selects
+`PON_POWER_OFF_WARM_RESET` when `force_warm_reboot` is set, read from a DT
+property. So one line on the `qcom,pshold` node:
+
+```dts
+qcom,force-warm-reboot;
+```
+
+`scripts/xiaomi_ramoops.py` applies that, sets the ramoops node to the ROM's
+exact geometry (0xB0000000, 4M, console 2M, pmsg 2M, record 0, ecc 0), and
+creates the node if the tree has none. Then, after a failed boot:
+
+```sh
+adb shell su -c 'cat /sys/fs/pstore/console-ramoops-0'   # kernel
+adb shell su -c 'cat /sys/fs/pstore/pmsg-ramoops-0'      # userspace/logd
+```
+
+## 17. Build discipline
+
+Roughly half the build failures in this effort were the harness, not the trees.
+See [BUILD_PREFLIGHT.md](BUILD_PREFLIGHT.md). `scripts/preflight.py` checks a
+tree over the GitHub API in seconds and `--dry-run` executes every patch script
+against it; `scripts/launch_build.sh` refuses to dispatch on a BLOCKER, and a
+PreToolUse hook blocks `gh workflow run` that bypasses it.
+
+Rules that came out of the failures:
+- never `sys.exit` on "already done" -- a tree that already has the modern
+  layout is not broken
+- fail loudly only when you would emit something *wrong* (e.g. refusing to
+  guess an enum's numbering)
+- never put logic in a CI heredoc; it cannot be tested, and the one we had
+  silently deleted `source "arch/$SRCARCH/Kconfig"`
+- a checklist that can be skipped will be skipped
