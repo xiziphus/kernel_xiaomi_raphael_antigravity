@@ -88,12 +88,17 @@ def main():
         print("  verifier.c: already allows XSKMAP")
     else:
         a1 = "\tcase BPF_MAP_TYPE_DEVMAP:\n"
-        a2 = "\t\tif (map->map_type != BPF_MAP_TYPE_DEVMAP &&\n"
+        # Extend the EXISTING condition. Prefixing another `if (...)  &&` line
+        # ahead of it produced two consecutive `if`s and
+        # "verifier.c:1810: error: expected expression".
+        a2 = "\t\t    map->map_type != BPF_MAP_TYPE_DEVMAP_HASH)\n"
         if a1 not in src or a2 not in src:
             sys.exit("FATAL: redirect_map compatibility check not found in " + VERIFIER)
         src = src.replace(a1, a1 + "\tcase BPF_MAP_TYPE_XSKMAP:\n", 1)
         src = src.replace(
-            a2, "\t\tif (map->map_type != BPF_MAP_TYPE_XSKMAP &&\n" + a2, 1)
+            a2,
+            "\t\t    map->map_type != BPF_MAP_TYPE_DEVMAP_HASH &&\n"
+            "\t\t    map->map_type != BPF_MAP_TYPE_XSKMAP)\n", 1)
         open(VERIFIER, "w", encoding="utf-8").write(src)
         print("  verifier.c: bpf_redirect_map accepts XSKMAP")
         changed += 1
