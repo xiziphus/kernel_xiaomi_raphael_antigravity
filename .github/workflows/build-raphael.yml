@@ -62,6 +62,11 @@ on:
         required: false
         type: string
         default: 'true'
+      fake_uname:
+        description: 'Kernel release reported to bpfloader/netbpfload/netd only (scripts/fake_uname_bpfloader.py). netbpfload hard-refuses <4.19 -- "Android V requires kernel 4.19." -- which is the actual cause of reboot,bpfloader-failed. Empty = do not patch. Claiming a version also makes the loader attempt that version''s programs.'
+        required: false
+        type: string
+        default: ''
       bpf_donor:
         description: 'Optional "<git-url>@<ref>" whose BPF subsystem is grafted over this tree (scripts/transplant_bpf.sh). Use to bring openela BPF to bool-x -- the direction that matches what KameOS actually is.'
         required: false
@@ -276,6 +281,11 @@ jobs:
           if [ -n "${{ inputs.bpf_donor }}" ]; then
             DONOR="${{ inputs.bpf_donor }}"
             bash "$GITHUB_WORKSPACE/scripts/transplant_bpf.sh" "${DONOR%@*}" "${DONOR##*@}"
+          fi
+
+          if [ -n "${{ inputs.fake_uname }}" ]; then
+            FAKE_UNAME_RELEASE="${{ inputs.fake_uname }}" \
+              python3 "$GITHUB_WORKSPACE/scripts/fake_uname_bpfloader.py"
           fi
 
           if [ "${{ inputs.bpf_devmap_hash }}" != "false" ]; then
