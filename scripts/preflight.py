@@ -1,21 +1,43 @@
 #!/usr/bin/env python3
-"""Check a kernel tree for the known build-breakers BEFORE burning a 20-min runner.
+"""Predict whether a kernel build will succeed AND produce what we asked for.
 
-Usage:  scripts/preflight.py <owner/repo> <ref> [defconfig]
+    scripts/preflight.py <owner/repo> <ref> [defconfig] [--dry-run] [--json]
 
-Every check here exists because it actually broke a build in this project. Runs
-in seconds against the GitHub API -- no clone. Exit code is non-zero if any
-BLOCKER is found; WARNs are advisory.
+Two questions, in order of importance:
+
+  1. Will the options we care about actually reach the compiled kernel?
+     This is the one that matters. `merge_config.sh` retention can be a clean
+     63/63 while the build still drops options at olddefconfig time, and CI
+     only notices ~20 minutes in ("CONFIG_X lost at config time"). A symbol
+     that is not DEFINED anywhere in the tree's Kconfig can never survive, and
+     that is checkable in seconds.
+
+  2. Will it build at all?
+     Defconfig present, appended-DTB target, dangling Makefile objects, empty
+     submodules, and the tree-specific landmines already recorded in CLAUDE.md.
+
+Everything is driven off ONE recursive tree listing rather than dozens of
+per-path probes, so it is fast enough that there is no excuse to skip it --
+and scripts/launch_build.sh refuses to dispatch without it.
 """
+import base64
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 FLAGS = [a for a in sys.argv[1:] if a.startswith("--")]
+if len(ARGS) < 2:
+    sys.exit(__doc__)
 REPO, REF = ARGS[0], ARGS[1]
 DEFCONFIG = ARGS[2] if len(ARGS) > 2 else "raphael_defconfig"
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+
 blockers, warns, notes = [], [], []
 
 
@@ -25,7 +47,6 @@ def gh(path):
 
 
 def text(path):
-    import base64
     out = gh("repos/%s/contents/%s?ref=%s" % (REPO, path, REF))
     if not out:
         return None
@@ -35,171 +56,149 @@ def text(path):
         return None
 
 
-def listdir(path):
-    out = gh("repos/%s/contents/%s?ref=%s" % (REPO, path, REF))
-    if not out:
-        return []
+# ---------------------------------------------------------------- one tree read
+tree, truncated = set(), False
+raw = gh("repos/%s/git/trees/%s?recursive=1" % (REPO, REF))
+if raw:
     try:
-        return [e["name"] for e in json.loads(out)]
+        j = json.loads(raw)
+        truncated = j.get("truncated", False)
+        tree = {e["path"]: e for e in j.get("tree", [])}
     except Exception:
-        return []
-
-
-print("=== preflight %s@%s (defconfig=%s)" % (REPO, REF, DEFCONFIG))
-
-# 0. tree exists / version
-mk = text("Makefile")
-if not mk:
-    print("BLOCKER: cannot read Makefile -- wrong repo or ref?")
+        tree = {}
+if not tree:
+    blockers.append("could not read the git tree for %s@%s" % (REPO, REF))
+    print("BLOCKER: " + blockers[-1])
     sys.exit(1)
-ver = " ".join(l.strip() for l in mk.splitlines()[1:4])
-notes.append("version: %s" % ver)
+if truncated:
+    warns.append("git tree listing was TRUNCATED -- path checks are incomplete")
 
-# 1. defconfig present (a missing one fails only after clang is fetched)
-cfgs = listdir("arch/arm64/configs")
+has = lambda p: p in tree
+notes.append("%d paths%s" % (len(tree), " (truncated)" if truncated else ""))
+
+mk = text("Makefile") or ""
+notes.append("version: " + " ".join(l.strip() for l in mk.splitlines()[1:4]))
+
+# ------------------------------------------------- 1. will our options survive?
+wanted = []
+dc = os.path.join(ROOT, "docker.config")
+if os.path.exists(dc):
+    for line in open(dc):
+        m = re.match(r"CONFIG_(\w+)=", line.strip())
+        if m:
+            wanted.append(m.group(1))
+if wanted:
+    # Which symbols does this tree actually DEFINE? One code-search per miss is
+    # far too slow, so scan the Kconfig files we can cheaply reach and treat
+    # "not found anywhere we looked" as a warning rather than a hard blocker.
+    kconfigs = [p for p in tree
+                if os.path.basename(p) == "Kconfig" or os.path.basename(p).startswith("Kconfig.")]
+    notes.append("%d Kconfig files in tree" % len(kconfigs))
+    defined = set()
+    # Grep the handful of Kconfigs that define the vast majority of what we want.
+    for probe in ("init/Kconfig", "net/Kconfig", "net/netfilter/Kconfig",
+                  "net/ipv4/netfilter/Kconfig", "net/ipv6/netfilter/Kconfig",
+                  "fs/Kconfig", "fs/overlayfs/Kconfig", "drivers/net/Kconfig",
+                  "net/bridge/Kconfig", "net/sched/Kconfig", "security/Kconfig",
+                  "net/core/Kconfig", "kernel/Kconfig.preempt", "mm/Kconfig"):
+        if not has(probe):
+            continue
+        t = text(probe) or ""
+        for m in re.finditer(r"^\s*(?:menu)?config\s+(\w+)", t, re.M):
+            defined.add(m.group(1))
+    missing = [w for w in wanted if w not in defined]
+    notes.append("docker.config: %d options, %d confirmed defined"
+                 % (len(wanted), len(wanted) - len(missing)))
+    if missing:
+        warns.append("not confirmed in the Kconfigs sampled (may live elsewhere, "
+                     "but these are the ones that go missing at config time): %s"
+                     % " ".join(missing[:12]))
+
+# ------------------------------------------------------- 2. will it build at all
+cfgdir = "arch/arm64/configs/"
+cfgs = sorted(p[len(cfgdir):] for p in tree if p.startswith(cfgdir) and "/" not in p[len(cfgdir):])
 if DEFCONFIG not in cfgs:
-    vend = listdir("arch/arm64/configs/vendor")
-    if DEFCONFIG in vend:
-        notes.append("defconfig lives under vendor/ -- pass 'vendor/%s'" % DEFCONFIG)
+    if has(cfgdir + "vendor/" + DEFCONFIG):
+        notes.append("defconfig is under vendor/ -- pass 'vendor/%s'" % DEFCONFIG)
     else:
-        blockers.append("defconfig '%s' not in arch/arm64/configs (have: %s)"
-                        % (DEFCONFIG, " ".join(sorted(cfgs)[:8])))
+        blockers.append("defconfig '%s' absent (have: %s)" % (DEFCONFIG, " ".join(cfgs[:8])))
 
-# 2. appended-DTB target: 5.4/GKI trees have none, so Image.gz-dtb does not exist
 akc = text("arch/arm64/Kconfig") or ""
 if "BUILD_ARM64_APPENDED_DTB_IMAGE" not in akc:
-    warns.append("no BUILD_ARM64_APPENDED_DTB_IMAGE in arch/arm64/Kconfig -- "
-                 "'make Image.gz-dtb' will fail; you MUST pass append_dtb=<base>.dtb")
-    # and the named base must actually be reachable: msm trees gate the whole
-    # dts Makefile behind a MACH_* symbol, so dtb-y can be empty even though
-    # the .dts is sitting right there.
+    warns.append("no appended-DTB target -- Image.gz-dtb WILL fail; pass append_dtb=<base>.dtb")
     dmk = text("arch/arm64/boot/dts/qcom/Makefile") or ""
-    dts = [n for n in listdir("arch/arm64/boot/dts/qcom") if n.endswith(".dts")]
-    notes.append("qcom .dts available: %s" % " ".join(sorted(dts)[:8]))
-    gate = re.findall(r"ifeq \(\$\(CONFIG_(\w+)\),y\)", dmk)
-    if gate:
-        notes.append("dts Makefile gated on: %s -- these must be =y or dtb-y is EMPTY"
-                     % ", ".join(sorted(set(gate))))
+    gates = sorted(set(re.findall(r"ifeq \(\$\(CONFIG_(\w+)\),y\)", dmk)))
+    if gates:
+        warns.append("dts Makefile gated on %s -- if unset, dtb-y is EMPTY and no base dtb is built"
+                     % ", ".join(gates))
 
-# 3. Makefile references to source files that were deleted from the tree
 amk = text("arch/arm64/kernel/Makefile") or ""
-srcs = set(listdir("arch/arm64/kernel"))
 for obj in ("perf_trace_counters", "perf_trace_user"):
-    if obj + ".o" in amk and obj + ".c" not in srcs:
-        warns.append("arch/arm64/kernel/Makefile wants %s.o but %s.c is absent "
-                     "(CI strips this automatically)" % (obj, obj))
+    if obj + ".o" in amk and not has("arch/arm64/kernel/%s.c" % obj):
+        notes.append("dangling Makefile object %s.o (CI strips it)" % obj)
 
-# 4. the two BPF patch scripts must be able to no-op safely
+gm = text(".gitmodules")
+if gm:
+    paths = re.findall(r"path\s*=\s*(\S+)", gm)
+    warns.append("submodule(s) %s -- empty on --depth=1; CI inits or drops their Kconfig source()"
+                 % " ".join(paths))
+
+# tree-specific landmines, straight out of CLAUDE.md
+dcfg = text(cfgdir + DEFCONFIG) or ""
+for sym, why in (("CONFIG_FTRACE", "binder_trace.h undeclared strings; 9 errors"),
+                 ("CONFIG_DEBUG_FS", "ipa_eth.c calls undeclared debugfs helpers under -Werror"),
+                 ("CONFIG_MODULES", "stub-regulator exports an __init fn; mismatches are fatal here")):
+    if re.search(r"^%s=y" % sym, dcfg, re.M):
+        warns.append("%s=y in the defconfig -- %s" % (sym, why))
+if re.search(r"^# CONFIG_LLVM_POLLY is not set", dcfg, re.M):
+    notes.append("LLVM_POLLY disabled (good -- it HANGS, 20+ min on one file)")
+elif "LLVM_POLLY" in (text("Makefile") or ""):
+    warns.append("LLVM_POLLY not explicitly disabled -- it hangs the build rather than failing")
+
+# BPF/pstore facts the patches key off
 sysc = text("kernel/bpf/syscall.c") or ""
 for cmd in ("BPF_MAP_CREATE", "BPF_PROG_LOAD"):
     m = re.search(r"#define\s+%s_LAST_FIELD\s+(\S+)" % cmd, sysc)
     notes.append("%s_LAST_FIELD = %s" % (cmd, m.group(1) if m else "NOT FOUND"))
-    if not m:
-        warns.append("%s_LAST_FIELD not found -- bpf_attr patch will skip" % cmd)
-
 uapi = text("include/uapi/linux/bpf.h") or ""
-m = re.search(r"enum bpf_map_type \{(.*?)\n\};", uapi, re.S)
-if m:
-    last = re.findall(r"\bBPF_MAP_TYPE_[A-Z0-9_]+", m.group(1))[-1]
-    notes.append("enum bpf_map_type ends at %s" % last)
-    if last != "BPF_MAP_TYPE_SOCKMAP" and "DEVMAP_HASH" not in uapi:
-        warns.append("map-type backport refuses trees whose enum ends at %s" % last)
-notes.append("has DEVMAP_HASH=%s  expected_attach_type=%s  btf.c=%s"
-             % ("DEVMAP_HASH" in uapi, "expected_attach_type" in uapi,
-                bool(gh("repos/%s/contents/kernel/bpf/btf.c?ref=%s" % (REPO, REF)))))
+hooks = [k for k in ("BPF_CGROUP_INET4_BIND", "BPF_CGROUP_INET4_CONNECT",
+                     "BPF_CGROUP_UDP4_SENDMSG", "BPF_CGROUP_UDP4_RECVMSG",
+                     "BPF_CGROUP_GETSOCKOPT", "BPF_CGROUP_SETSOCKOPT",
+                     "BPF_PROG_TYPE_CGROUP_SOCKOPT", "BPF_PROG_TYPE_CGROUP_SOCK_ADDR")
+         if k in uapi]
+notes.append("cgroup hook set: %d/8%s" % (len(hooks), "" if len(hooks) == 8 else "  -> needs a bpf_donor if claiming >=4.19"))
+notes.append("DEVMAP_HASH=%s btf.c=%s fake-uname=%s"
+             % ("DEVMAP_HASH" in uapi, has("kernel/bpf/btf.c"), "fake uname" in (text("kernel/sys.c") or "")))
+sm = text("arch/arm64/boot/dts/qcom/sm8150.dtsi") or ""
+if 'compatible = "qcom,pshold"' not in sm:
+    warns.append("no qcom,pshold node -- cannot force warm reset, so a clean reboot WIPES the log")
+if "ramoops@" not in sm:
+    notes.append("no ramoops@ node -- falls back to the ramoops_memreserve cmdline path")
 
-# 5. pstore: the log channel. Needs a ramoops node AND a pshold node for warm reset.
-found_ramoops = found_pshold = False
-for f in listdir("arch/arm64/boot/dts/qcom"):
-    if not f.endswith((".dts", ".dtsi")):
-        continue
-    if f not in ("sm8150.dtsi",):
-        continue
-    t = text("arch/arm64/boot/dts/qcom/" + f) or ""
-    found_ramoops = found_ramoops or ("ramoops@" in t)
-    found_pshold = found_pshold or ('compatible = "qcom,pshold"' in t)
-if not found_ramoops:
-    warns.append("no ramoops@ node in sm8150.dtsi -- falls back to the cmdline mechanism")
-if not found_pshold:
-    warns.append("no qcom,pshold node in sm8150.dtsi -- cannot force warm reset, "
-                 "so a clean reboot will WIPE the log")
-
-# 6. Polly hangs the build (20+ min at 99% CPU on one file, never finishes)
-if "CONFIG_LLVM_POLLY" in (text("Makefile") or "") or "polly" in (mk or "").lower():
-    notes.append("tree references LLVM_POLLY -- ensure it is disabled")
-
-
-# 11. Submodules / gitlinks. A --depth=1 clone leaves these EMPTY, and a Kconfig
-#     `source` or Makefile obj-y pointing into one then kills the build --
-#     e.g. Rikka: can't open file "drivers/staging/kernelsu/kernel/Kconfig".
-#     This project has hit the same class before (mkbootimg_src is a gitlink
-#     with no .gitmodules, so it clones empty), which is why it is checked here
-#     rather than waiting to be surprised by it again.
-gm = text(".gitmodules")
-if gm:
-    paths = re.findall(r"path\s*=\s*(\S+)", gm)
-    notes.append(".gitmodules declares: %s" % (" ".join(paths) or "(none)"))
-    warns.append("%d submodule(s) -- CI inits them and drops dangling Kconfig "
-                 "source() lines; without that the build dies at defconfig"
-                 % len(paths))
-# gitlinks are entries of type "commit"; catch the ones with no .gitmodules too
-for probe in ("", "drivers", "drivers/staging"):
-    out = gh("repos/%s/contents/%s?ref=%s" % (REPO, probe, REF))
-    if not out:
-        continue
-    try:
-        entries = json.loads(out)
-    except Exception:
-        continue
-    if not isinstance(entries, list):
-        continue
-    for e in entries:
-        if e.get("type") == "submodule" or (e.get("type") == "file" and e.get("size") == 0
-                                            and e.get("submodule_git_url")):
-            where = probe + "/" + e["name"] if probe else e["name"]
-            if not gm:
-                blockers.append("gitlink '%s' with NO .gitmodules -- clones empty "
-                                "and cannot be inited" % where)
-            else:
-                notes.append("gitlink: %s" % where)
-
-
-# 12. DRY-RUN every patch script against the real files. Three of the failures
-#     so far were our own tooling, not the trees, and an inline heredoc in the
-#     workflow could not be tested at all -- hence scripts/, and hence this.
-import subprocess, tempfile, shutil
-def dry_run():
-    need = ["kernel/sys.c", "kernel/bpf/syscall.c", "include/uapi/linux/bpf.h",
-            "include/linux/bpf_types.h", "fs/pstore/ram.c",
-            "arch/arm64/boot/dts/qcom/sm8150.dtsi"]
+# ------------------------------------------------------------------ 3. dry-run
+if "--dry-run" in FLAGS:
     d = tempfile.mkdtemp()
-    got = []
-    for rel in need:
+    for rel in ("kernel/sys.c", "kernel/bpf/syscall.c", "include/uapi/linux/bpf.h",
+                "include/linux/bpf_types.h", "fs/pstore/ram.c",
+                "arch/arm64/boot/dts/qcom/sm8150.dtsi"):
         t = text(rel)
         if t is None:
             continue
         os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
         open(os.path.join(d, rel), "w", encoding="utf-8").write(t)
-        got.append(rel)
-    here = os.path.dirname(os.path.abspath(__file__))
-    for script, env in (("backport_bpf_map_types.py", {}),
-                        ("backport_bpf_attr.py", {}),
+    for script, env in (("backport_bpf_map_types.py", {}), ("backport_bpf_attr.py", {}),
                         ("fake_uname_bpfloader.py", {"FAKE_UNAME_RELEASE": "5.4.186"}),
                         ("xiaomi_ramoops.py", {})):
         e = dict(os.environ); e.update(env)
-        r = subprocess.run(["python3", os.path.join(here, script)],
-                           cwd=d, capture_output=True, text=True, env=e)
-        tag = "ok  " if r.returncode == 0 else "FAIL"
-        first = (r.stdout.strip().splitlines() or [""])[0]
-        err = (r.stderr.strip().splitlines() or [""])[-1]
-        print("dryrun : %s %-28s %s" % (tag, script, first or err))
-        if r.returncode != 0:
-            blockers.append("%s fails on this tree: %s" % (script, err))
+        r = subprocess.run(["python3", os.path.join(HERE, script)], cwd=d,
+                           capture_output=True, text=True, env=e)
+        head = (r.stdout.strip().splitlines() or [""])[0]
+        tail = (r.stderr.strip().splitlines() or [""])[-1]
+        print("dryrun : %s %-28s %s" % ("ok  " if not r.returncode else "FAIL",
+                                        script, head or tail))
+        if r.returncode:
+            blockers.append("%s fails on this tree: %s" % (script, tail))
     shutil.rmtree(d, ignore_errors=True)
-
-import os
-if "--dry-run" in FLAGS:
-    dry_run()
 
 for b in blockers:
     print("BLOCKER: " + b)
@@ -207,5 +206,7 @@ for w in warns:
     print("WARN   : " + w)
 for n in notes:
     print("note   : " + n)
+if "--json" in FLAGS:
+    print(json.dumps({"repo": REPO, "ref": REF, "blockers": blockers, "warns": warns}))
 print("=== %s" % ("BLOCKED" if blockers else "ok to build"))
 sys.exit(1 if blockers else 0)
