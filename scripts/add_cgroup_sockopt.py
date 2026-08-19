@@ -258,6 +258,18 @@ def main():
             s = s.replace(a2, a2.replace(
                 "\tcase BPF_PROG_TYPE_CGROUP_SOCK:\n",
                 "\tcase BPF_PROG_TYPE_CGROUP_SOCK:\n\tcase BPF_PROG_TYPE_CGROUP_SOCKOPT:\n"), 1)
+        # bpf_prog_attach()/detach() have their own attach_type -> prog_type
+        # switch. netd aborts on an EINVAL from BPF_PROG_ATTACH, so loading
+        # without attaching is worse than useless.
+        a3 = "\tcase BPF_CGROUP_SOCK_OPS:\n\t\tptype = BPF_PROG_TYPE_SOCK_OPS;\n"
+        n = s.count(a3)
+        if n != 2:
+            sys.exit("FATAL: expected the SOCK_OPS arm twice (attach and detach) "
+                     "in %s, found %d" % (SYSCALL, n))
+        s = s.replace(a3,
+                      "\tcase BPF_CGROUP_GETSOCKOPT:\n"
+                      "\tcase BPF_CGROUP_SETSOCKOPT:\n"
+                      "\t\tptype = BPF_PROG_TYPE_CGROUP_SOCKOPT;\n" + a3)
         return s
     if edit(SYSCALL, f_syscall):
         print("  syscall.c: CGROUP_SOCKOPT accepted at load and attach")
@@ -272,7 +284,7 @@ def main():
     for path, need in ((FILTER_H, "bpf_sockopt_kern"),
                        (TYPES, "cg_sockopt_prog_ops"),
                        (FILTER_C, "cg_sockopt_prog_ops"),
-                       (SYSCALL, "BPF_CGROUP_GETSOCKOPT")):
+                       (SYSCALL, "ptype = BPF_PROG_TYPE_CGROUP_SOCKOPT;")):
         if need not in open(path, encoding="utf-8", errors="replace").read():
             sys.exit("FATAL: %s missing from %s after patch" % (need, path))
     print("  VERIFIED: cgroup sockopt program type is loadable")

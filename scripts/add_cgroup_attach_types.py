@@ -20,7 +20,19 @@ kernel claiming 5.4 is offered netd.o's 4.19- and 5.4-gated programs, and
 bpf_prog_load_check_attach_type() rejects every expected_attach_type it does
 not name -- hence EINVAL at load, before the verifier is ever reached.
 
-Stage 1 (this script, ~20 lines of kernel change):
+netd then does the second half. It is not enough for the programs to LOAD:
+netd attaches them, and if BPF_PROG_ATTACH returns EINVAL it aborts --
+
+    NetdUpdatable: libnetd_updatable_init: Failed: (22) [Invalid argument] :
+        Program /sys/fs/bpf/netd_shared/prog_netd_recvmsg4_udp4_recvmsg
+        attach failed
+    F libc: Fatal signal 6 (SIGABRT) ... in netd
+
+and a dead netd is a zygote crash-loop, so the device reaches userspace, runs
+adbd and dockerd, and never finishes booting. bpf_prog_attach()/detach() carry
+their own attach_type -> prog_type switch, which must learn the new types too.
+
+Stage 1 (this script, ~30 lines of kernel change):
   * declare attach types 14,15 (UDP sendmsg) and 19,20 (UDP recvmsg) and
     21,22 (cgroup get/setsockopt), with EXPLICIT numbers so 16-18
     (LIRC_MODE2, FLOW_DISSECTOR, CGROUP_SYSCTL) stay unclaimed and the
@@ -82,19 +94,38 @@ def patch_uapi():
 
 def patch_syscall():
     src = open(SYSCALL, encoding="utf-8", errors="replace").read()
+    if "BPF_CGROUP_UDP4_SENDMSG" in src:
+        print("  syscall.c: sendmsg/recvmsg already accepted")
+        return False
+
+    # (1) load path
     anchor = "\t\tcase BPF_CGROUP_INET6_CONNECT:\n\t\t\treturn 0;\n"
     if anchor not in src:
         sys.exit("FATAL: CGROUP_SOCK_ADDR arm of bpf_prog_load_check_attach_type "
                  "not found in " + SYSCALL + " -- refusing to guess")
-    if "BPF_CGROUP_UDP4_SENDMSG" in src:
-        print("  syscall.c: sendmsg/recvmsg already accepted")
-        return False
     add = "".join("\t\tcase %s:\n" % n for n in SOCK_ADDR)
     src = src.replace(anchor,
                       "\t\tcase BPF_CGROUP_INET6_CONNECT:\n" + add + "\t\t\treturn 0;\n",
                       1)
+
+    # (2) attach and detach paths -- bpf_prog_attach() and bpf_prog_detach()
+    # each carry their OWN attach_type -> prog_type switch, and both default to
+    # -EINVAL. Loading without attaching is what killed netd.
+    att = ("\tcase BPF_CGROUP_INET4_BIND:\n"
+           "\tcase BPF_CGROUP_INET6_BIND:\n"
+           "\tcase BPF_CGROUP_INET4_CONNECT:\n"
+           "\tcase BPF_CGROUP_INET6_CONNECT:\n"
+           "\t\tptype = BPF_PROG_TYPE_CGROUP_SOCK_ADDR;\n")
+    n = src.count(att)
+    if n != 2:
+        sys.exit("FATAL: expected the CGROUP_SOCK_ADDR arm twice (attach and "
+                 "detach) in %s, found %d" % (SYSCALL, n))
+    add2 = "".join("\tcase %s:\n" % x for x in SOCK_ADDR)
+    src = src.replace(att,
+                      att.replace("\t\tptype = BPF_PROG_TYPE_CGROUP_SOCK_ADDR;\n",
+                                  add2 + "\t\tptype = BPF_PROG_TYPE_CGROUP_SOCK_ADDR;\n"))
     open(SYSCALL, "w", encoding="utf-8").write(src)
-    print("  syscall.c: CGROUP_SOCK_ADDR now accepts sendmsg4/6 + recvmsg4/6")
+    print("  syscall.c: sendmsg4/6 + recvmsg4/6 accepted at load, attach and detach")
     return True
 
 
@@ -107,10 +138,13 @@ def verify():
     bad = [n for n, _ in NEW_ATTACH if n not in u]
     if bad:
         sys.exit("FATAL: attach types missing after patch: " + " ".join(bad))
-    bad = [n for n in SOCK_ADDR if "case %s:" % n not in s]
-    if bad:
-        sys.exit("FATAL: not accepted at load time: " + " ".join(bad))
-    print("  VERIFIED: 6 attach types declared, 4 accepted for CGROUP_SOCK_ADDR")
+    for n in SOCK_ADDR:
+        # once in the load check, once in attach, once in detach
+        if s.count("case %s:" % n) < 3:
+            sys.exit("FATAL: %s appears %d times in %s, expected 3 "
+                     "(load, attach, detach)" % (n, s.count("case %s:" % n), SYSCALL))
+    print("  VERIFIED: 6 attach types declared; sendmsg/recvmsg wired into "
+          "load, attach and detach")
 
 
 if __name__ == "__main__":
