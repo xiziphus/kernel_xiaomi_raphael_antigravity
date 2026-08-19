@@ -31,6 +31,12 @@ STOCK="$REPO/builds/kameos-docker-20260804-024211/boot-kameos-stock.img"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# raphael boots system-as-root: without this the kernel ignores the initramfs,
+# magiskinit never runs, and the device comes up rootless and silent about it.
+cp "$IMAGE" "$WORK/Image.gz-dtb"
+python3 "$REPO/scripts/want_initramfs.py" "$WORK/Image.gz-dtb"
+IMAGE="$WORK/Image.gz-dtb"
+
 python3 "$REPO/scripts/unpack_boot.py" "$STOCK" "$WORK" >/dev/null
 
 # Prefer a Magisk-patched ramdisk when one has been captured. The stock
@@ -59,7 +65,19 @@ PY
 # recorded init's "bpfloader ... failed" line and NOT the NetBpfLoad lines
 # that say WHY -- the log looked complete while missing the only part that
 # matters. bool-x happened to ship a higher default and hid the problem.
-CMDLINE="$CMDLINE ramoops_memreserve=4M loglevel=8 ignore_loglevel printk.devkmsg=on androidboot.ktest=$KTEST"
+# QUIET_LOG=1 drops the two verbose flags. They are what makes netbpfload's
+# reasoning visible, but they also fill the 2 MB pstore console in ~2 s, so the
+# FIRST-stage boot (magiskinit, init first stage, sepolicy load) wraps out of
+# the buffer. Use QUIET_LOG=1 when the question is about early boot instead.
+if [ "${QUIET_LOG:-0}" = "2" ]; then
+  # Keep devkmsg so USERSPACE writes to /dev/kmsg (magiskinit logs there) are
+  # recorded, but drop the kernel's own flood so the 2 MB buffer covers boot.
+  CMDLINE="$CMDLINE ramoops_memreserve=4M printk.devkmsg=on androidboot.ktest=$KTEST"
+elif [ "${QUIET_LOG:-0}" = "1" ]; then
+  CMDLINE="$CMDLINE ramoops_memreserve=4M androidboot.ktest=$KTEST"
+else
+  CMDLINE="$CMDLINE ramoops_memreserve=4M loglevel=8 ignore_loglevel printk.devkmsg=on androidboot.ktest=$KTEST"
+fi
 
 mkdir -p "$(dirname "$OUT")"
 python3 "$REPO/mkbootimg_src/mkbootimg.py" \
