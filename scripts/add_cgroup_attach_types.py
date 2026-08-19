@@ -32,6 +32,19 @@ and a dead netd is a zygote crash-loop, so the device reaches userspace, runs
 adbd and dockerd, and never finishes booting. bpf_prog_attach()/detach() carry
 their own attach_type -> prog_type switch, which must learn the new types too.
 
+And then a THIRD time, silently. With load and attach both working, netd still
+aborted inside BpfHandler::init with no message at all. Disassembling it (via
+the .gnu_debugdata MiniDebugInfo in libnetd_updatable.so) shows init ends with
+a verification sweep: for each attach type in turn it calls
+android::bpf::queryProgram(cg_fd, type, 0, 0) and abort()s outright if the
+result is not positive -- fourteen calls, fourteen identical `bl abort` landing
+pads, no logging on any of them. The sequence is 1, 0, 2, 8, 9, then 34 behind
+an isAtLeastKernelVersion(5,10) gate, then 10, 11, 19, 20, 14, 15 behind (4,19),
+then 21, 22 behind (5,4) -- i.e. exactly the attach types, version-gated the
+same way netbpfload gates its programs.
+
+bpf_prog_query() has its own switch as well, and it is the last one.
+
 Stage 1 (this script, ~30 lines of kernel change):
   * declare attach types 14,15 (UDP sendmsg) and 19,20 (UDP recvmsg) and
     21,22 (cgroup get/setsockopt), with EXPLICIT numbers so 16-18
@@ -72,6 +85,8 @@ NEW_ATTACH = [
 # Only these route through the existing CGROUP_SOCK_ADDR program type.
 SOCK_ADDR = ["BPF_CGROUP_UDP4_SENDMSG", "BPF_CGROUP_UDP6_SENDMSG",
              "BPF_CGROUP_UDP4_RECVMSG", "BPF_CGROUP_UDP6_RECVMSG"]
+# Every new type must also be QUERYABLE, sockopt included.
+NEW_ATTACH_NAMES = [n for n, _ in NEW_ATTACH]
 
 
 def patch_uapi():
@@ -108,7 +123,23 @@ def patch_syscall():
                       "\t\tcase BPF_CGROUP_INET6_CONNECT:\n" + add + "\t\t\treturn 0;\n",
                       1)
 
-    # (2) attach and detach paths -- bpf_prog_attach() and bpf_prog_detach()
+    # (2) query path -- BPF_PROG_QUERY has a third switch, defaulting to
+    # -EINVAL. netd's BpfHandler::init verifies every attach type with
+    # queryProgram() and abort()s on a non-positive result, with no log line.
+    q = ("\tcase BPF_CGROUP_INET4_CONNECT:\n"
+         "\tcase BPF_CGROUP_INET6_CONNECT:\n"
+         "\tcase BPF_CGROUP_SOCK_OPS:\n"
+         "\t\tbreak;\n")
+    if q not in src:
+        sys.exit("FATAL: bpf_prog_query attach-type switch not found in " + SYSCALL)
+    src = src.replace(q,
+                      "\tcase BPF_CGROUP_INET4_CONNECT:\n"
+                      "\tcase BPF_CGROUP_INET6_CONNECT:\n"
+                      + "".join("\tcase %s:\n" % n for n in NEW_ATTACH_NAMES) +
+                      "\tcase BPF_CGROUP_SOCK_OPS:\n"
+                      "\t\tbreak;\n", 1)
+
+    # (3) attach and detach paths -- bpf_prog_attach() and bpf_prog_detach()
     # each carry their OWN attach_type -> prog_type switch, and both default to
     # -EINVAL. Loading without attaching is what killed netd.
     att = ("\tcase BPF_CGROUP_INET4_BIND:\n"
@@ -139,12 +170,15 @@ def verify():
     if bad:
         sys.exit("FATAL: attach types missing after patch: " + " ".join(bad))
     for n in SOCK_ADDR:
-        # once in the load check, once in attach, once in detach
-        if s.count("case %s:" % n) < 3:
-            sys.exit("FATAL: %s appears %d times in %s, expected 3 "
-                     "(load, attach, detach)" % (n, s.count("case %s:" % n), SYSCALL))
-    print("  VERIFIED: 6 attach types declared; sendmsg/recvmsg wired into "
-          "load, attach and detach")
+        # load check + attach + detach + query
+        if s.count("case %s:" % n) < 4:
+            sys.exit("FATAL: %s appears %d times in %s, expected 4 "
+                     "(load, attach, detach, query)" % (n, s.count("case %s:" % n), SYSCALL))
+    for n in ("BPF_CGROUP_GETSOCKOPT", "BPF_CGROUP_SETSOCKOPT"):
+        if s.count("case %s:" % n) < 1:
+            sys.exit("FATAL: %s never reaches bpf_prog_query()" % n)
+    print("  VERIFIED: 6 attach types declared; wired into load, attach, "
+          "detach and query")
 
 
 if __name__ == "__main__":
