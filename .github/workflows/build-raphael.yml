@@ -97,6 +97,11 @@ on:
         required: false
         type: string
         default: 'false'
+      cgroup_device:
+        description: 'true = add BPF_PROG_TYPE_CGROUP_DEVICE (15) + BPF_CGROUP_DEVICE (6) so runc can query/load/attach its device program on cgroup v2 (scripts/add_cgroup_device.py). Without it `docker run` fails with bpf_prog_query(BPF_CGROUP_DEVICE): invalid argument. Load-only: device restrictions are NOT enforced.'
+        required: false
+        type: string
+        default: 'false'
       bpf_graft_scope:
         description: '"sockopt" = graft ONLY the sendmsg/recvmsg + cgroup-sockopt files (what Zundamon actually added to Rikka). "full" = the whole BPF subsystem.'
         required: false
@@ -356,6 +361,10 @@ jobs:
 
           if [ "${{ inputs.trie_next_key }}" = "true" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/backport_trie_get_next_key.py"
+          fi
+
+          if [ "${{ inputs.cgroup_device }}" = "true" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/add_cgroup_device.py"
           fi
 
           if [ -n "${{ inputs.fake_uname }}" ]; then
