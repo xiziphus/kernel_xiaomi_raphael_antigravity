@@ -1,0 +1,80 @@
+name: Build ERPNext image (arm64)
+
+# Builds a Frappe/ERPNext image with the extra bench apps baked in, for the
+# phone. india_compliance and helpdesk are BENCH APPS, not containers -- they
+# have to be present at image build time, so the stock frappe/erpnext image
+# cannot be used as-is.
+#
+# Runs on GitHub's arm64 runner. Building arm64 on an Intel Mac means QEMU and
+# hours; here it is native.
+
+on:
+  workflow_dispatch:
+    inputs:
+      frappe_branch:
+        description: 'Frappe/ERPNext branch (the phone was on v16)'
+        required: false
+        default: 'version-16'
+      india_compliance_branch:
+        required: false
+        default: 'version-16'
+      helpdesk_branch:
+        required: false
+        default: 'main'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout frappe_docker
+        uses: actions/checkout@v4
+        with:
+          repository: frappe/frappe_docker
+          ref: main
+
+      - name: Compose apps.json
+        id: apps
+        run: |
+          cat > apps.json <<EOF
+          [
+            {"url": "https://github.com/frappe/erpnext",              "branch": "${{ inputs.frappe_branch }}"},
+            {"url": "https://github.com/resilient-tech/india-compliance", "branch": "${{ inputs.india_compliance_branch }}"},
+            {"url": "https://github.com/frappe/helpdesk",             "branch": "${{ inputs.helpdesk_branch }}"}
+          ]
+          EOF
+          cat apps.json
+          echo "b64=$(base64 -w0 apps.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/layered/Containerfile
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/erpnext-phone:latest
+          build-args: |
+            FRAPPE_PATH=https://github.com/frappe/frappe
+            FRAPPE_BRANCH=${{ inputs.frappe_branch }}
+            APPS_JSON_BASE64=${{ steps.apps.outputs.b64 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: What got built
+        run: |
+          echo "image: ghcr.io/${{ github.repository_owner }}/erpnext-phone:latest"
+          echo "apps:  erpnext + india_compliance + helpdesk on frappe ${{ inputs.frappe_branch }}"
