@@ -3,9 +3,9 @@
 The InfinityX stack ran Docker in a Debian chroot at `/data/debian`. On the
 KameOS Docker kernel it runs natively on bionic out of `/data/local/tmp/nd`.
 
-Everything above the chroot boundary — `dockerctl`, `sshd.sh`, `relay.sh`,
-`pumpd.sh`, `doctor.sh`, `trek.sh`, `fixall`, ~20 files — talks to it through
-exactly four functions plus the daemon lifecycle:
+Everything above the chroot boundary — `dockerctl` and the ~20 service scripts
+beside it — talks to it through exactly four functions plus the daemon
+lifecycle:
 
     mount_chroot  umount_chroot  in_chroot  in_chroot_exec
     daemon_start  daemon_stop
@@ -33,9 +33,14 @@ the chroot path. Its boot hook is replaced by `service.d-native-docker.sh`.
 
 ## Traps carried over from the old stack
 
-* **The sshd-keeper container owns sshd's cgroup.** `docker rm -f sshd-keeper`
-  kills sshd instantly — never over SSH; use adb or Portainer.
-* **`fixall` cannot be run over SSH**: `ssh lan on` restarts sshd at step 2 of
-  5, dropping your own connection before the container steps run.
-* **`fixall` never clears `$STATE/battery.tripped`**, and `pwr_tick` returns
-  early while it exists, so the battery guard comes back disarmed.
+These are generic to running sshd from a container on Android, and each was hit
+for real:
+
+* **A container that owns sshd's cgroup kills sshd when removed.** `docker rm -f`
+  on it drops your session mid-script, so the command that would have recreated
+  it never runs. Do that over adb, never over SSH.
+* **Any repair script that restarts sshd cannot be run over SSH.** If the
+  restart is step 2 of 5, steps 3-5 never execute and you cannot see that they
+  did not.
+* **A tripped battery guard is sticky.** Repair scripts that do not clear the
+  trip flag bring the stack back with the guard permanently disarmed.

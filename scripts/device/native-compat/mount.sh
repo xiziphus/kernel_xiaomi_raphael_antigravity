@@ -2,7 +2,7 @@
 # Native replacement for the chroot layer.
 #
 # The InfinityX stack ran Docker inside a Debian chroot at /data/debian, and
-# ~20 scripts (dockerctl, sshd.sh, relay.sh, pumpd.sh, doctor.sh, fixall, ...)
+# ~20 service scripts on top of it (dockerctl and friends)
 # call into it through exactly four functions. On the KameOS kernel Docker runs
 # NATIVELY on bionic out of /data/local/tmp/nd, so those four are reimplemented
 # here and everything above them works unchanged.

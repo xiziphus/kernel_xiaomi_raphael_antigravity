@@ -51,8 +51,8 @@ Eleven distinct blockers had to fall; full narrative with the wrong turns in
 
 ## infinityx-v1 — 2026-08-04
 
-Docker on **InfinityX 3.11** (`4.14.356-openela-rc1-perf`). Ran the full stack —
-sshd, Portainer, pumpd, notification relays — for days.
+Docker on **InfinityX 3.11** (`4.14.356-openela-rc1-perf`). Ran a persistent
+multi-container workload for days, including reboots.
 
 Superseded on KameOS: this kernel is AOSP-lineage and **powers the device off
 before init** on a MIUI-vendor ROM. Kept because it is the reference for the
