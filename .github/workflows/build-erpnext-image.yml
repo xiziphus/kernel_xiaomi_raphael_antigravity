@@ -47,7 +47,6 @@ jobs:
           ]
           EOF
           cat apps.json
-          echo "b64=$(base64 -w0 apps.json)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -70,7 +69,13 @@ jobs:
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=${{ inputs.frappe_branch }}
-            APPS_JSON_BASE64=${{ steps.apps.outputs.b64 }}
+          # images/layered/Containerfile mounts apps.json as a BUILD SECRET
+          # (--mount=type=secret,id=apps_json), not a build-arg. Passing
+          # APPS_JSON_BASE64 was silently ignored: the image built fine and
+          # contained only frappe, and the failure surfaced much later as
+          # `No module named 'erpnext'` during bench new-site.
+          secret-files: |
+            apps_json=./apps.json
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
