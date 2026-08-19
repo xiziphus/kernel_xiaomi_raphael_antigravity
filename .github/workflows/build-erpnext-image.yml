@@ -69,6 +69,7 @@ jobs:
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=${{ inputs.frappe_branch }}
+            CACHE_BUST=${{ github.run_id }}
           # images/layered/Containerfile mounts apps.json as a BUILD SECRET
           # (--mount=type=secret,id=apps_json), not a build-arg. Passing
           # APPS_JSON_BASE64 was silently ignored: the image built fine and
@@ -76,10 +77,24 @@ jobs:
           # `No module named 'erpnext'` during bench new-site.
           secret-files: |
             apps_json=./apps.json
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No cache-from. The apps are fetched in a single RUN layer, so a
+          # cached layer from a build whose apps.json was wrong is reused
+          # verbatim -- which is exactly what happened: the secret-files fix
+          # below was correct and still produced a frappe-only image, because
+          # buildx never re-ran the step. CACHE_BUST above covers the same
+          # ground; belt and braces.
+          no-cache: true
 
-      - name: What got built
+      - name: Verify the apps are actually in the image
         run: |
-          echo "image: ghcr.io/${{ github.repository_owner }}/erpnext-phone:latest"
-          echo "apps:  erpnext + india_compliance + helpdesk on frappe ${{ inputs.frappe_branch }}"
+          # Do NOT skip this. A silently app-less image builds clean and only
+          # fails ~10 minutes into `bench new-site` on the target, with
+          # "No module named 'erpnext'". Twice.
+          IMG=ghcr.io/${{ github.repository_owner }}/erpnext-phone:latest
+          docker pull -q "$IMG"
+          APPS=$(docker run --rm --entrypoint ls "$IMG" /home/frappe/frappe-bench/apps | tr '\n' ' ')
+          echo "apps in image: $APPS"
+          for a in frappe erpnext india_compliance helpdesk; do
+            echo "$APPS" | grep -qw "$a" || { echo "MISSING: $a"; exit 1; }
+          done
+          echo "all four apps present"
