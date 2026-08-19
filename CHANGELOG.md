@@ -1,62 +1,69 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+Docker-enabled kernels for the Xiaomi Redmi K20 Pro (`raphael`).
 
-## [1.0.0] - 2025-11-22
-
-### Testing
-- Tested on Redmi K20 Pro (raphael)
-- ROM: Evolution X Android 16
-- Root: Magisk (KernelSU code included but not tested)
-- Status: Fully functional
-
-### Added
-- Initial release of Docker-enabled kernel for Redmi K20 Pro (Android 16)
-- Full Docker kernel support:
-  - User Namespaces (`CONFIG_USER_NS`)
-  - PID Namespaces (`CONFIG_PID_NS`)
-  - Cgroup PIDs controller (`CONFIG_CGROUP_PIDS`)
-  - Cgroup Device controller (`CONFIG_CGROUP_DEVICE`)
-  - OverlayFS (`CONFIG_OVERLAY_FS`)
-  - VETH networking (`CONFIG_VETH`)
-  - Bridge networking (`CONFIG_BRIDGE`)
-  - IP Masquerading (`CONFIG_IP_NF_TARGET_MASQUERADE`)
-- KernelSU support (built-in)
-- Based on SOVIET-ANDROID kernel 4.14.353-openela
-
-### Fixed
-- Boot encryption compatibility by setting correct OS patch level (2025-10)
-- Bootloop issues by using stock kernel source instead of Evolution X
-- Config fragment merging using `merge_config.sh` for reliable flag application
-
-### Known Issues
-- Docker userspace runtime (`runc`/`crun`) incompatible due to Android PIE enforcement
-  - Kernel features are fully functional
-  - Workaround: Use PIE-compiled runtime or alternative containerization
-
-### Technical Details
-- **Kernel Version**: 4.14.353-openela-SOVIET-STAR
-- **Build Date**: November 22, 2025
-- **Toolchain**: Android Clang 18.0.1 (r522817)
-- **Build Optimizations**: ccache, tmpfs, 16-core parallel compilation
-
-### Verification
-- ✅ Device boots successfully on Evolution X Android 16
-- ✅ Encryption working (no "corrupt data" error)
-- ✅ Magisk root working
-- ✅ User namespaces verified (`/proc/self/ns/user` present)
-- ✅ PIDs cgroup verified (`/proc/cgroups` shows `pids` enabled)
-- ✅ Manual `unshare` test successful
-- ⚠️ Docker runtime blocked by Android security (non-PIE binary rejection)
-
-### Maintenance Status
-- ⚠️ **Not actively maintained** - Provided as-is for educational purposes and as a foundation for others
+Both releases are `fastboot boot`-testable first; `fastboot flash boot` only
+once you have seen the device come up. Stock restore images are in `backups/`.
 
 ---
 
-## Release Assets
+## kameos-v1 — 2026-08-19
 
-- `boot-raphael-docker-v1.0.img` - Flashable boot image
-- `Image.gz-dtb` - Kernel image with device tree
-- `docker.config` - Kernel config fragment for Docker support
-- Source code (linked to SOVIET-ANDROID repository)
+First kernel to run Docker on **KameOS v3.303** (HyperOS 3 / Android 16 system
+on MIUI 12.5.6 / Android 11 vendor).
+
+Verified on device: `docker run --rm alpine` returns
+`Linux <cid> 4.14.341 aarch64` with outbound networking.
+
+* Base `tingyuwuxin/kernel_xiaomi_raphael@rikka-v5`; BPF backports from
+  `HeliumStudio-Dev/kernel_xiaomi_raphael@oss-base` (Zundamon). Clang r522817.
+* Namespaces the stock ROM kernel lacks: `pid`, `ipc`, `uts`, `user`
+  (stock has only `cgroup`, `mnt`, `net`), plus cgroup `devices` and `pids`.
+
+Eleven distinct blockers had to fall; full narrative with the wrong turns in
+[docs/KAMEOS_DOCKER_JOURNEY.md](docs/KAMEOS_DOCKER_JOURNEY.md) §18.
+
+| | blocker | fix |
+|---|---|---|
+| 1 | netbpfload refuses any kernel <5.4 on a 25Q2 ROM | report `5.4.186` to bpfloader/netbpfload/netd only |
+| 2 | `recvmsg4` load EINVAL | declare attach types 14/15/19/20/21/22 |
+| 3 | `getsockopt_prog` load EINVAL | `BPF_PROG_TYPE_CGROUP_SOCKOPT` + `struct bpf_sockopt` |
+| 4 | `mi_xsk_port_map` errno 22 | declare XSKMAP (17) |
+| 5 | `flags:0/128` mismatch | alias it to `array_map_ops` — `dev_map_ops` force-sets `BPF_F_RDONLY_PROG` |
+| 6 | osrtpPolicy's XDP program rejected | no-op `bpf_trace_printk`, as the ROM's own kernel does |
+| 7 | booted fine, no root, no log anywhere | hexpatch `skip_initramfs` → `want_initramfs` |
+| 8 | `attach failed` → netd SIGABRT | attach *and* detach carry their own switches |
+| 9 | silent `abort()` in netd | `BPF_PROG_QUERY` is a fourth switch |
+| 10 | `nativeGetNextMapKey errno 524` killed system_server | implement `trie_get_next_key` (upstream `b471f2f1de8b`) |
+| 11 | `bpf_prog_query(BPF_CGROUP_DEVICE)` blocked `docker run` | add `BPF_CGROUP_DEVICE`/`BPF_PROG_TYPE_CGROUP_DEVICE` |
+
+### Known limits
+
+* **Container device restrictions are not enforced.** The CGROUP_DEVICE program
+  loads and attaches but has no runtime hook. Trusted images only.
+* Same for sockopt and sendmsg/recvmsg: loaded and attached, never run. The
+  loaders cannot tell; tethering's RTP fast path does not accelerate.
+* XSKMAP is an array underneath, so AF_XDP redirect is a no-op.
+* Root has no default route on Android — `docker pull` needs the `ip rule` that
+  `docker-net-watch.sh` maintains, or netd wipes it.
+
+---
+
+## infinityx-v1 — 2026-08-04
+
+Docker on **InfinityX 3.11** (`4.14.356-openela-rc1-perf`). Ran the full stack —
+sshd, Portainer, pumpd, notification relays — for days.
+
+Superseded on KameOS: this kernel is AOSP-lineage and **powers the device off
+before init** on a MIUI-vendor ROM. Kept because it is the reference for the
+InfinityX/EvolutionX line, and because the userspace stack above it is the one
+being carried forward.
+
+---
+
+## Restoring the userspace stack
+
+The InfinityX `dockerctl` stack ran Docker in a Debian chroot at `/data/debian`.
+On the KameOS kernel Docker runs natively out of `/data/local/tmp/nd`. Only the
+bottom two files change — see
+[scripts/device/native-compat/](scripts/device/native-compat/).
