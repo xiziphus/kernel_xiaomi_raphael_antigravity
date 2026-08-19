@@ -118,6 +118,32 @@ const struct bpf_verifier_ops cg_dev_prog_ops = {
 """
 
 
+def check_max_attach_type():
+    """__MAX_BPF_ATTACH_TYPE must end up >= the largest explicit value.
+
+    It is defined as `previous enumerator + 1`, so ANY new entry placed last
+    with a small explicit value silently truncates it. That cost one build and
+    two device cycles, with no log to show for it because the kernel died
+    before ramoops.
+    """
+    s = open(UAPI, encoding="utf-8", errors="replace").read()
+    body = re.search(r"enum bpf_attach_type \{\n(.*?)\t__MAX_BPF_ATTACH_TYPE",
+                     s, re.S).group(1)
+    val, biggest, last = -1, -1, -1
+    for line in body.splitlines():
+        m = re.match(r"\s*(BPF_[A-Z0-9_]+)\s*(?:=\s*(\d+))?\s*,", line)
+        if not m:
+            continue
+        val = int(m.group(2)) if m.group(2) else val + 1
+        biggest = max(biggest, val)
+        last = val
+    if last != biggest:
+        sys.exit("FATAL: last attach-type enumerator is %d but the largest is %d "
+                 "-- __MAX_BPF_ATTACH_TYPE would be %d and truncate "
+                 "cgrp->bpf.progs[]" % (last, biggest, last + 1))
+    print("  VERIFIED: __MAX_BPF_ATTACH_TYPE = %d (largest value + 1)" % (biggest + 1))
+
+
 def main():
     if not os.path.exists(UAPI):
         sys.exit("FATAL: run from the kernel tree root")
@@ -132,10 +158,15 @@ def main():
     if not m:
         sys.exit("FATAL: no 'enum bpf_prog_type' in " + UAPI)
     s = s[:m.end(1)] + "\n\tBPF_PROG_TYPE_CGROUP_DEVICE = 15," + s[m.end(1):]
-    m = re.search(r"(enum bpf_attach_type \{\n)(.*?)(\t__MAX_BPF_ATTACH_TYPE)", s, re.S)
-    if not m:
-        sys.exit("FATAL: no 'enum bpf_attach_type' in " + UAPI)
-    s = s[:m.start(3)] + "\tBPF_CGROUP_DEVICE = 6,\n" + s[m.start(3):]
+    # Insert in NUMERIC position, never last. __MAX_BPF_ATTACH_TYPE takes the
+    # value of the preceding enumerator + 1, so appending "= 6" just before it
+    # collapsed MAX from 23 to 7 -- which shrinks cgrp->bpf.progs[]/effective[]
+    # and makes every attach type >= 7 index out of bounds. The kernel panicked
+    # before ramoops came up, so it booted nothing and logged nothing.
+    anchor = "\tBPF_SK_SKB_STREAM_VERDICT,\n"
+    if anchor not in s:
+        sys.exit("FATAL: expected BPF_SK_SKB_STREAM_VERDICT in the attach enum")
+    s = s.replace(anchor, anchor + "\tBPF_CGROUP_DEVICE = 6,\n", 1)
     i = s.rfind("#endif")
     s = s[:i] + CTX + "\n" + s[i:]
     open(UAPI, "w", encoding="utf-8").write(s)
@@ -182,6 +213,7 @@ def main():
     if s.count("case BPF_CGROUP_DEVICE:") != 3:
         sys.exit("FATAL: BPF_CGROUP_DEVICE appears %d times in %s, expected 3"
                  % (s.count("case BPF_CGROUP_DEVICE:"), SYSCALL))
+    check_max_attach_type()
     print("  VERIFIED: cgroup device program type loadable, attachable, queryable")
 
 
