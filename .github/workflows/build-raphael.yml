@@ -92,6 +92,11 @@ on:
         required: false
         type: string
         default: 'false'
+      trie_next_key:
+        description: 'true = implement trie_get_next_key() for LPM_TRIE maps (scripts/backport_trie_get_next_key.py). rikka-v5 stubs it to -ENOTSUPP, which makes NetworkStatsService throw on local_net_access and takes system_server down.'
+        required: false
+        type: string
+        default: 'false'
       bpf_graft_scope:
         description: '"sockopt" = graft ONLY the sendmsg/recvmsg + cgroup-sockopt files (what Zundamon actually added to Rikka). "full" = the whole BPF subsystem.'
         required: false
@@ -347,6 +352,10 @@ jobs:
 
           if [ "${{ inputs.trace_printk_dummy }}" = "true" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/add_trace_printk_dummy.py"
+          fi
+
+          if [ "${{ inputs.trie_next_key }}" = "true" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/backport_trie_get_next_key.py"
           fi
 
           if [ -n "${{ inputs.fake_uname }}" ]; then
