@@ -568,3 +568,174 @@ Rules that came out of the failures:
 - never put logic in a CI heredoc; it cannot be tested, and the one we had
   silently deleted `source "arch/$SRCARCH/Kconfig"`
 - a checklist that can be skipped will be skipped
+
+---
+
+## 18. The night the wall came down (2026-08-18 → 19)
+
+Everything above ends with "netbpfload refuses the kernel." This section is
+what happened when that was finally pushed all the way through, written as it
+went — including the wrong turns, because several of them cost more than the
+fixes did.
+
+### 18.1 The base was wrong for a whole session
+
+The plan going in was to graft openela's BPF subsystem onto bool-x. Five
+successive smoke-gate failures later it was dragging in `JMP32`, `prog->blinded`,
+`kprobe_override` and raw tracepoints to satisfy a donor `core.o`. The graft was
+abandoned. Two discoveries replaced it:
+
+**Zundamon's source is public.** `HeliumStudio-Dev/kernel_xiaomi_raphael@oss-base`
+carries the exact uname spoof that had been reverse-engineered out of the ROM
+binary — same three process names, same `5.4.186`, plus a `current_uid().val == 0`
+guard the disassembly had not revealed. 4.14.356, 8/8 cgroup hooks, real
+DEVMAP_HASH, `btf.c`, and a clean per-commit UPSTREAM backport series.
+
+**But it is a donor, not a base.** It powers the device off before init: it is
+the OSS/lineage variant, `-perf` defconfig, no `MACH_XIAOMI`, no `MIHW`/`MILLET`/
+`SDCARD_FS`, and `drivers/input/touchscreen/xiaomi/` does not exist in the tree
+at all. The ROM has `xiaomi_touch` symbols and mounts sdcardfs, so KameOS's
+kernel comes from an unpublished MIUI sibling. Base = Rikka; donor = oss-base.
+
+### 18.2 Two bugs in the log channel, one of them mine three times over
+
+Two Rikka boots reached netbpfload, failed, and left `/sys/fs/pstore` empty.
+That read as a fourth bug in `xiaomi_ramoops.py`, after three earlier ones. It
+was not: **rikka-v5's defconfig contains no PSTORE symbol at all**, so the RAM
+backend was never compiled in. bool-x and oss-base both enable it in-tree, which
+is why only Rikka went dark. The CI fragment now forces it and the pre-build
+check gates on it.
+
+With PSTORE on, the log arrived and still said nothing useful — init's
+"bpfloader ... failed" verdict and none of netbpfload's reasoning. netbpfload
+logs through `base::KernelLogger` at KERN_INFO and Rikka's console loglevel
+drops that; bool-x happened to ship a higher default and had hidden the problem.
+Adding `ignore_loglevel` produced a log that ended in:
+
+    netbpfload: 222 output lines suppressed due to ratelimiting
+
+`/dev/kmsg` rate-limits unless `printk.devkmsg=on`. Both flags are now in
+`repack_kameos.sh`. Only then did the actual reasoning appear.
+
+### 18.3 The walls, in the order they fell
+
+Each one was read off the device, fixed, and re-tested. None was guessed.
+
+| # | symptom | cause | fix |
+|---|---|---|---|
+| 1 | `Android 25Q2 requires kernel 5.4` | version gate | uname spoof → `kver:50400ba` |
+| 2 | `recvmsg4_udp4_recvmsg` load EINVAL | `bpf_attach_type` stops at 13 | declare 14/15/19/20/21/22 |
+| 3 | `getsockopt_prog` load EINVAL | no `CGROUP_SOCKOPT` prog type | type 25 + `struct bpf_sockopt` |
+| 4 | `mi_xsk_port_map` errno 22 | XSKMAP (17) undeclared | alias onto `array_map_ops` |
+| 5 | `flags:0/128` | `dev_map_ops` force-sets `RDONLY_PROG` | alias onto `array_map_ops`, not devmap |
+| 6 | helper 6 rejected | no `BPF_EVENTS` → NULL proto | no-op `bpf_trace_printk` |
+| 7 | **no root, silently** | `skip_initramfs` | hexpatch → `want_initramfs` |
+| 8 | `recvmsg4 ... attach failed` | attach/detach have own switches | wire types into both |
+| 9 | silent `abort()` in netd | `BPF_PROG_QUERY` has a *fourth* switch | wire types into query too |
+| 10 | `nativeGetNextMapKey errno 524` | `trie_get_next_key` stubbed `-ENOTSUPP` | backport upstream `b471f2f1de8b` |
+
+Sizes for scale: netd.o's `recvmsg4` program is **two instructions**
+(`r0 = 1; exit`); `getsockopt` is **four** (`bpf_sockopt.optlen = 0`). None of
+this needed working hooks — it needed the kernel to *accept and report* them.
+
+### 18.4 The `flags:128/0` mystery, solved from the other side
+
+bool-x had failed for weeks on:
+
+    tether_dev_map mismatch: type:25/25 key:4/4 value:4/4 entries:64/64 flags:128/0
+
+Widening every `*_CREATE_FLAG_MASK` and adding `BPF_F_RDONLY_PROG` changed
+nothing, and it had been written off as unresolved. The answer turned up
+backwards, when the XSKMAP alias produced the mirror image — `flags:0/128` —
+and the cause was one line in `kernel/bpf/devmap.c`:
+
+    attr->map_flags |= BPF_F_RDONLY_PROG;
+
+Rikka's newer devmap *forces* the flag (the loader asks 0, reads 128); bool-x's
+older devmap never sets it (the loader asks 128, reads 0). **The flag is set by
+the allocator, not accepted from userspace**, so no amount of mask-widening
+could ever have fixed it.
+
+### 18.5 The silent-root trap
+
+A kernel that boots perfectly and has no `su`, with nothing in any log. raphael
+is system-as-root: the bootloader passes `skip_initramfs`, the kernel mounts
+`/system` as root and ignores the initramfs, so `magiskinit` — which lives only
+in the ramdisk — never runs.
+
+Guessing burned real time here: SELinux `policyvers`, `TMPFS_XATTR`, a
+KernelSU/Magisk conflict, even a rebuild with `CONFIG_KSU` off. **The control
+settled it in one boot**: repacking KameOS's *own* kernel through the identical
+pipeline — same ramdisk, same cmdline, same header — produced working root,
+leaving the kernel binary as the only variable. A byte comparison then read:
+
+    ROM (Zundamon)   skip_initramfs=0  want_initramfs=2   <- already patched
+    ours             skip_initramfs=1  want_initramfs=0
+
+Note that Magisk's current `boot_patch.sh` no longer applies that hexpatch —
+running the device's own copy over our image left the string untouched and
+booted equally rootless. `scripts/want_initramfs.py` does it now, on every image.
+
+### 18.6 Two self-inflicted wounds worth remembering
+
+**A missing `break`.** The sockopt attach cases were inserted ahead of the
+`SOCK_OPS` arm without one, so `ptype` fell through to `BPF_PROG_TYPE_SOCK_OPS`
+and `bpf_prog_get_type()` rejected the program. Symptom: recvmsg attaching fine
+and getsockopt failing one line later. Every patch script now asserts its own
+post-conditions and is dry-run against the real tree before dispatch.
+
+**Testing the wrong kernel.** A missing-`addrtype` failure was chased for a
+while before `uname -v` showed the ROM's build stamp — the device had rebooted
+back to stock minutes earlier and `ro.boot.ktest` was empty. Both a failed
+`fastboot boot` and an init-triggered reboot land on the ROM. Check
+`/proc/version` before trusting any on-device result.
+
+### 18.7 Reading a silent abort
+
+Wall 9 logged nothing at all — netd aborted 1 ms after "Initializing", no
+message, no abort message, not the `ALOGE`+abort path the earlier attach
+failures took. The answer came out of `.gnu_debugdata` (MiniDebugInfo) inside
+`libnetd_updatable.so`, which yields a symbol table even though the library is
+stripped. `BpfHandler::init` (base `0x45f4`, 4756 bytes) ends with a
+verification sweep:
+
+    queryProgram(cg_fd, <attach_type>, 0, 0)   x14
+    cmp w0, #0 ; b.le <one of 14 identical 'bl abort' pads>
+
+The sequence — 1, 0, 2, 8, 9, then 34 behind `isAtLeastKernelVersion(5,10)`,
+then 10, 11, 19, 20, 14, 15 behind (4,19), then 21, 22 behind (5,4) — is exactly
+the attach types, gated the way netbpfload gates its programs. netd does not
+just load and attach: it **queries**, and aborts bare if the answer is not
+positive. `bpf_prog_query()` is a fourth switch, separate from load, attach and
+detach.
+
+**The rule this yields: one new attach type must be taught to four independent
+switches, and the kernel gives no hint which one is missing.**
+
+### 18.8 What works now
+
+Verified on device, not inferred:
+
+* netbpfload passes completely — `bpf.progs_loaded=1`, all 19 `netd_shared`
+  programs pinned including sockopt and Xiaomi's `osrtpPolicy`, the same set the
+  ROM's own kernel produces.
+* Root works on the custom kernel.
+* `dockerd` runs: overlay2 on f2fs, cgroup v2, bridge/veth, `addrtype` present,
+  containerd 2.3.3 + runc 1.4.3, `docker0` at 172.17.0.1/16.
+* Namespaces the ROM kernel lacks are all present:
+  `cgroup ipc mnt net pid pid_for_children user uts`, plus cgroup `devices`
+  and `pids`.
+
+Still open at the time of writing: system_server reaching
+`NetworkStatsService` (wall 10, building).
+
+### 18.9 Honest accounting
+
+Of the ten walls, **six were genuine kernel gaps**, one was a missing image
+hexpatch, and **three were mistakes of mine** — a stub aliased onto the one
+allocator that forces a flag, a missing `break`, and several hours spent
+diagnosing a kernel that was not running. The pattern that consistently worked
+was the control: run the ROM's own kernel through the identical pipeline and see
+whether the symptom survives. It settled the root question in one boot after
+hypothesis-chasing had failed, and it is cheaper than any amount of reasoning
+about what *should* matter.
