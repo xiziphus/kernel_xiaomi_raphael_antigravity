@@ -145,12 +145,24 @@ jobs:
           echo "after:"; df -h / | tail -1
 
       - name: Install build dependencies
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
+          # apt on the hosted runners hung indefinitely twice in a row (B3rk and
+          # B4rk both sat on this step for 25+ min while every later step stayed
+          # pending). The job timeout is 150 min, so a wedged apt burns two and a
+          # half hours before anything notices. Bound the step, and retry the
+          # update against a different mirror rather than failing the build.
+          for i in 1 2 3; do
+            sudo timeout 120 apt-get update && break
+            echo "apt-get update attempt $i failed/timed out; retrying"
+            sudo sed -i 's|http://azure.archive.ubuntu.com|http://archive.ubuntu.com|g' \
+              /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+            sleep 5
+          done
           # NOTE: do NOT install distro clang -- this tree must build with the AOSP
           # prebuilt (r522817) or it bootloops. We only need binutils, host libs,
           # the cross-gcc prefixes for CROSS_COMPILE, and packaging tools.
-          sudo apt-get install -y --no-install-recommends \
+          sudo timeout 300 apt-get install -y --no-install-recommends \
             build-essential bc bison flex libelf-dev libssl-dev ccache \
             lz4 zip unzip python3 cpio wget git \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
