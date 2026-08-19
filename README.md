@@ -16,15 +16,26 @@ Linux ba3ef3f3dc33 4.14.341 #1 SMP PREEMPT aarch64 Linux
 Stock Android kernels can't do this: they ship without the namespaces Docker
 needs. This repo builds one that can, and gives you the userspace to go with it.
 
+**Does this help if you have a different phone?** The kernel patches here are
+not device-specific — they close gaps between a 2017-era 4.14 kernel and what
+Android 16's network stack demands, and any device stuck on an old kernel with
+a new Android will hit the same walls in the same order. What *is* specific to
+this phone is the boot image packing and which ROM lineage a kernel will boot.
+So the fixes should port; the release binaries will not. The
+[build recipe](docs/KAMEOS_DOCKER_BUILD.md) marks which is which.
+
 ## Will this work on my phone?
 
 You need **all** of these:
 
 - [ ] Xiaomi Redmi K20 Pro or Mi 9T Pro (`raphael` / `raphaelin`) — no other device
 - [ ] Bootloader unlocked
-- [ ] Root (Magisk). The kernel boots without it, but you can't start Docker without it
+- [ ] Root via [Magisk](https://github.com/topjohnwu/Magisk) (the standard Android
+      rooting tool). The kernel boots fine without root — you just can't start
+      Docker, since `dockerd` needs it
 - [ ] A stock `boot.img` for your ROM, saved somewhere safe
-- [ ] `adb` and `fastboot` on a computer
+- [ ] `adb` and `fastboot` on a computer (Google's
+      [platform-tools](https://developer.android.com/tools/releases/platform-tools))
 
 **Which kernel you need depends on your ROM**, and picking the wrong one just
 fails to boot:
@@ -66,6 +77,10 @@ git clone https://github.com/xiziphus/kernel_xiaomi_raphael_antigravity
 cd kernel_xiaomi_raphael_antigravity
 ./scripts/build_native_docker.sh      # builds and pushes to the phone
 ```
+
+This compiles Docker, containerd and runc for arm64 and pushes them, along with
+the `native-docker.sh` launcher used below, to `/data/local/tmp/nd/` on the
+phone.
 
 ## Using it
 
@@ -110,16 +125,30 @@ Be aware of these before you rely on it:
   `docker-net.sh` when pulls start failing.
 - Tethering's hardware acceleration is disabled while this kernel is running.
   Tethering itself still works.
+- **Battery and heat.** An idle `dockerd` costs little, but a busy container
+  will warm the phone and drain it. Keep it plugged in if it's always-on.
 - This is a personal project, tested on one phone. It is not a product.
 
 ## Under the hood
 
 Android 16 refuses to boot on a kernel it thinks is too old — its network stack
-checks the kernel version before it checks anything else — and once you satisfy
-that, it demands a pile of modern eBPF features that a 2017-era 4.14 kernel
-doesn't have. Getting from "the kernel boots" to `docker run` meant clearing
-eleven separate blockers, each found by reading logs off the device rather than
-guessing.
+checks `uname()` before it looks at a single feature — and once you satisfy
+that, it demands a pile of modern eBPF the 4.14 kernel never had. Eleven
+separate things had to be fixed to get from "the kernel boots" to `docker run`.
+A sample, so you can judge the depth without leaving this page:
+
+- Android's BPF loader checks the kernel *version string* before any feature,
+  so the kernel reports `5.4.186` to that one process and nothing else.
+- Six cgroup attach types had to be taught to **four** independent kernel
+  switches — load, attach, detach, query. Miss one and the kernel names none
+  of them; you get a bare `abort()` in a daemon three layers away.
+- The kernel booted perfectly with no root and no log anywhere, because this
+  phone is system-as-root and the bootloader tells the kernel to skip the
+  ramdisk that root lives in.
+- On cgroup v2 there is no `devices.allow` file — the device controller *is* a
+  BPF program — so `docker run` needs a program type this kernel never had.
+
+Each was found by reading logs off the device, not by guessing.
 
 - [**How it was built**](docs/KAMEOS_DOCKER_BUILD.md) — the exact recipe, one row per fix
 - [**How it was figured out**](docs/KAMEOS_DOCKER_JOURNEY.md) — the full debugging story, wrong turns included
