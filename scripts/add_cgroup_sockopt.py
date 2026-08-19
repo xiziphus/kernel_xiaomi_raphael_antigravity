@@ -266,10 +266,17 @@ def main():
         if n != 2:
             sys.exit("FATAL: expected the SOCK_OPS arm twice (attach and detach) "
                      "in %s, found %d" % (SYSCALL, n))
+        # The `break` is load-bearing: without it the new cases fall through
+        # into the SOCK_OPS arm, ptype becomes BPF_PROG_TYPE_SOCK_OPS, and
+        # bpf_prog_get_type() rejects the program -- which is exactly how A8rk
+        # failed, with recvmsg now attaching and getsockopt_prog still EINVAL.
         s = s.replace(a3,
                       "\tcase BPF_CGROUP_GETSOCKOPT:\n"
                       "\tcase BPF_CGROUP_SETSOCKOPT:\n"
-                      "\t\tptype = BPF_PROG_TYPE_CGROUP_SOCKOPT;\n" + a3)
+                      "\t\tptype = BPF_PROG_TYPE_CGROUP_SOCKOPT;\n"
+                      "\t\tbreak;\n" + a3)
+        if s.count("ptype = BPF_PROG_TYPE_CGROUP_SOCKOPT;\n\t\tbreak;") != 2:
+            sys.exit("FATAL: sockopt attach arm did not get its break")
         return s
     if edit(SYSCALL, f_syscall):
         print("  syscall.c: CGROUP_SOCKOPT accepted at load and attach")
