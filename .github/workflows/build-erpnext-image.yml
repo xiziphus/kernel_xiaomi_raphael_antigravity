@@ -43,6 +43,7 @@ jobs:
           [
             {"url": "https://github.com/frappe/erpnext",              "branch": "${{ inputs.frappe_branch }}"},
             {"url": "https://github.com/resilient-tech/india-compliance", "branch": "${{ inputs.india_compliance_branch }}"},
+            {"url": "https://github.com/frappe/telephony",            "branch": "${{ inputs.frappe_branch }}"},
             {"url": "https://github.com/frappe/helpdesk",             "branch": "${{ inputs.helpdesk_branch }}"}
           ]
           EOF
@@ -94,7 +95,7 @@ jobs:
           docker pull -q "$IMG"
           APPS=$(docker run --rm --entrypoint ls "$IMG" /home/frappe/frappe-bench/apps | tr '\n' ' ')
           echo "apps in image: $APPS"
-          for a in frappe erpnext india_compliance helpdesk; do
+          for a in frappe erpnext india_compliance telephony helpdesk; do
             echo "$APPS" | grep -qw "$a" || { echo "MISSING: $a"; exit 1; }
           done
           echo "all four apps present"
