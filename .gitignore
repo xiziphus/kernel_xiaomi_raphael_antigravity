@@ -107,7 +107,16 @@ raphael-state/
 # Keeping build output and a nested clone out of this tree; the sources that
 # produce them are tracked.
 # ---------------------------------------------------------------------------
-builds/
+# builds/ is 1.5 GB of test images (54 of them at last count) -- still ignored.
+# builds/release/ is the carve-out: provenance is tracked, binaries are not.
+# The binaries go to GitHub Releases, which is where 13 MB blobs belong.
+# Note the boot.img embeds a Magisk-patched ramdisk (device state), so the
+# AnyKernel zip -- kernel only -- is the artifact to publish by preference.
+builds/*
+!builds/release/
+builds/release/*
+!builds/release/MANIFEST.md
+!builds/release/SHA256SUMS
 dist/
 module/
 repo-mirror/
