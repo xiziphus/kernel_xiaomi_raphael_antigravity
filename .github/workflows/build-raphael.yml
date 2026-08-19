@@ -102,6 +102,11 @@ on:
         required: false
         type: string
         default: 'false'
+      brand_author:
+        description: 'Name credited in the boot banner and in CONFIG_LOCALVERSION.'
+        required: false
+        type: string
+        default: 'xiziphus'
       bpf_graft_scope:
         description: '"sockopt" = graft ONLY the sendmsg/recvmsg + cgroup-sockopt files (what Zundamon actually added to Rikka). "full" = the whole BPF subsystem.'
         required: false
@@ -379,6 +384,9 @@ jobs:
             python3 "$GITHUB_WORKSPACE/scripts/add_cgroup_device.py"
           fi
 
+          BRAND_AUTHOR="${{ inputs.brand_author }}" \
+            python3 "$GITHUB_WORKSPACE/scripts/brand_kernel.py"
+
           if [ -n "${{ inputs.fake_uname }}" ]; then
             FAKE_UNAME_RELEASE="${{ inputs.fake_uname }}" \
               python3 "$GITHUB_WORKSPACE/scripts/fake_uname_bpfloader.py"
@@ -457,6 +465,8 @@ jobs:
           # Ours had no table at all ("0 candidates for kallsyms_token_table"),
           # so there was nothing to diff against when hunting the boot failure.
           cat > /tmp/ikconfig.config <<'FRAG'
+          CONFIG_LOCALVERSION="${{ inputs.localversion }}"
+          # CONFIG_LOCALVERSION_AUTO is not set
           CONFIG_IKCONFIG=y
           CONFIG_IKCONFIG_PROC=y
           CONFIG_KALLSYMS=y
